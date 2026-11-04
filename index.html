@@ -1,0 +1,2592 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0b7a6b">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Hacienda">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" type="image/png" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<title>Registro de Tags</title>
+<style>html{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}body{margin:0}.syncbar #syncTxt{flex-basis:120px}</style>
+<script>
+/* Puente para la versión instalada: reemplaza lo que antes daba la app de Claude
+   (conector de Google Sheets y descarga de archivos) y registra el modo sin señal. */
+(function () {
+  var KEY = 'rt_puente';
+  function cfg() { try { var c = JSON.parse(localStorage.getItem(KEY) || 'null'); return c && c.url ? c : null; } catch (e) { return null; } }
+
+  async function llamar(tool, args) {
+    var c = cfg();
+    if (!c) throw { code: 'upstream_error' };
+    var res, j;
+    try {
+      res = await fetch(c.url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify({ token: c.token || '', tool: tool, args: args }),
+        redirect: 'follow'
+      });
+    } catch (e) { throw { code: 'upstream_error' }; }
+    if (!res.ok) throw { code: 'upstream_error' };
+    try { j = await res.json(); } catch (e) { throw { code: 'tool_error', message: 'La dirección del puente no responde como corresponde.' }; }
+    if (j && j.error) throw { code: 'tool_error', message: j.error };
+    return { payload: j ? j.result : null };
+  }
+
+  function guardarArchivo(o) {
+    var name = o.filename || 'archivo';
+    var type = /\.pdf$/i.test(name) ? 'application/pdf' : /\.csv$/i.test(name) ? 'text/csv;charset=utf-8' : 'application/octet-stream';
+    var blob = new Blob([o.data], { type: type });
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 4000);
+    return Promise.resolve({ status: 'saved' });
+  }
+
+  window.claude = {
+    use: async function (name) {
+      if (name === 'downloads') return { save: guardarArchivo };
+      if (name === 'mcp') {
+        if (!cfg()) throw new Error('sin puente');
+        return { callTool: function (server, tool, args) { return llamar(tool, args); } };
+      }
+      throw new Error('no disponible');
+    }
+  };
+
+  /* ---------- ajustes: dirección del puente y clave ---------- */
+  document.addEventListener('DOMContentLoaded', function () {
+    var sync = document.getElementById('btnSync');
+    if (!sync) return;
+    var b = document.createElement('button');
+    b.type = 'button'; b.className = 'btn small'; b.id = 'btnCfg';
+    b.textContent = '⚙'; b.setAttribute('aria-label', 'Conectar con Google Sheets');
+    b.style.minWidth = '44px';
+    sync.parentNode.appendChild(b);
+
+    var dlg = document.createElement('dialog');
+    dlg.style.cssText = 'border:1px solid var(--line);border-radius:12px;background:var(--surface);color:var(--fg);padding:16px;width:min(92vw,460px)';
+    dlg.innerHTML =
+      '<form method="dialog" style="display:flex;flex-direction:column;gap:10px">' +
+      '<h2 class="sec">Conectar Google Sheets</h2>' +
+      '<p class="hint">Pegá la dirección de la aplicación web de Apps Script (termina en /exec) y la clave que pusiste en el script.</p>' +
+      '<label class="field"><span class="label">Dirección</span><input id="cfgUrl" type="url" inputmode="url" autocomplete="off" placeholder="https://script.google.com/macros/s/.../exec"></label>' +
+      '<label class="field"><span class="label">Clave</span><input id="cfgTok" type="text" autocomplete="off" autocapitalize="off"></label>' +
+      '<div class="btnrow">' +
+      '<button class="btn primary" value="ok" id="cfgOk">Guardar</button>' +
+      '<button class="btn" value="no">Cancelar</button>' +
+      '<button class="btn danger" value="del" id="cfgDel">Desconectar</button>' +
+      '</div></form>';
+    document.body.appendChild(dlg);
+
+    b.onclick = function () {
+      var c = cfg() || {};
+      dlg.querySelector('#cfgUrl').value = c.url || '';
+      dlg.querySelector('#cfgTok').value = c.token || '';
+      dlg.showModal();
+    };
+    dlg.addEventListener('close', function () {
+      var v = dlg.returnValue;
+      if (v === 'ok') {
+        var url = dlg.querySelector('#cfgUrl').value.trim();
+        var tok = dlg.querySelector('#cfgTok').value.trim();
+        if (!/^https:\/\/script\.google\.com\/macros\/s\/[^\/]+\/exec/.test(url)) { alert('La dirección tiene que empezar con https://script.google.com/macros/s/ y terminar en /exec'); return; }
+        try { localStorage.setItem(KEY, JSON.stringify({ url: url, token: tok })); } catch (e) {}
+        location.reload();
+      } else if (v === 'del') {
+        try { localStorage.removeItem(KEY); } catch (e) {}
+        location.reload();
+      }
+    });
+  });
+
+  /* ---------- modo sin señal ---------- */
+  if ('serviceWorker' in navigator && location.protocol !== 'file:') {
+    window.addEventListener('load', function () { navigator.serviceWorker.register('sw.js').catch(function () {}); });
+  }
+})();
+</script>
+</head>
+<body>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+/* Layout: una columna de herramienta de campo. Un menú de tres accesos (novedades, tropa, stock) y cada pantalla con su botón Menú arriba. */
+:root {
+  --bg: #edf1ef;
+  --surface: #fbfcfb;
+  --fg: #16211f;
+  --muted: #5a6a66;
+  --line: #d2dad7;
+  --accent: #0b7a6b;
+  --accent-fg: #ffffff;
+  --accent-soft: #d9efea;
+  --warn: #8a5a00;
+  --warn-soft: #f7e9c8;
+  --danger: #b3261e;
+  --font-display: "Barlow Condensed", "Arial Narrow", sans-serif;
+  --font-body: "IBM Plex Sans", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "Courier New", monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0e1614;
+    --surface: #16211e;
+    --fg: #e5eeeb;
+    --muted: #93a69f;
+    --line: #2a3a36;
+    --accent: #3ecfb2;
+    --accent-fg: #04241e;
+    --accent-soft: #15332d;
+    --warn: #f0c46a;
+    --warn-soft: #3a2f12;
+    --danger: #ff8f86;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0e1614;
+  --surface: #16211e;
+  --fg: #e5eeeb;
+  --muted: #93a69f;
+  --line: #2a3a36;
+  --accent: #3ecfb2;
+  --accent-fg: #04241e;
+  --accent-soft: #15332d;
+  --warn: #f0c46a;
+  --warn-soft: #3a2f12;
+  --danger: #ff8f86;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-body);
+  font-size: 15px;
+  line-height: 1.45;
+  padding-block: 18px 40px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+.app { max-width: 640px; margin: 0 auto; display: flex; flex-direction: column; gap: 16px; }
+.page { display: flex; flex-direction: column; gap: 16px; }
+button, input, textarea, select { font: inherit; color: inherit; }
+button { cursor: pointer; }
+button:disabled { opacity: 0.55; cursor: default; }
+a { color: var(--accent); }
+:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+
+header { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.hactions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+h1 {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 32px;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  margin: 0;
+  text-wrap: balance;
+}
+h2.sec { font-family: var(--font-display); font-size: 22px; text-transform: uppercase; letter-spacing: 0.03em; margin: 0; }
+.pill {
+  display: inline-flex; align-items: center; gap: 8px;
+  border: 1px solid var(--line); background: var(--surface);
+  border-radius: 999px; padding: 6px 12px; font-size: 13px; font-weight: 500;
+}
+.pill i { width: 9px; height: 9px; border-radius: 50%; background: var(--warn); display: block; }
+.pill.on i { background: var(--accent); }
+
+.syncbar {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  border: 1px solid var(--line); background: var(--surface); border-radius: 10px; padding: 8px 12px; font-size: 13px;
+}
+.syncbar i { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); flex: none; }
+.syncbar.ok i { background: var(--accent); }
+.syncbar.busy i { background: var(--warn); }
+.syncbar.err { background: var(--warn-soft); border-color: var(--warn); }
+.syncbar.err i { background: var(--danger); }
+.syncbar span { flex: 1 1 200px; min-width: 0; overflow-wrap: anywhere; }
+
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 14px; }
+.label {
+  font-size: 12px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted);
+}
+
+/* menú */
+.menu { display: flex; flex-direction: column; gap: 10px; }
+.mbtn {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px; text-align: left; width: 100%;
+  background: var(--accent); color: var(--accent-fg); border: 0; border-radius: 12px; padding: 20px 18px; min-height: 84px;
+}
+.mbtn.alt { background: var(--surface); color: var(--fg); border: 2px solid var(--accent); }
+.mbtn b { font-family: var(--font-display); font-size: 30px; line-height: 1; text-transform: uppercase; letter-spacing: 0.02em; display: block; }
+.mbtn small { display: block; font-size: 13px; opacity: 0.85; margin-top: 4px; }
+.mbtn .n { font-family: var(--font-mono); font-size: 14px; white-space: nowrap; }
+
+.scan { display: flex; flex-direction: column; gap: 8px; }
+.scan input.big, #scan, #scanT {
+  width: 100%; min-width: 0;
+  font-family: var(--font-mono); font-size: 22px; font-weight: 500;
+  background: var(--bg); border: 2px solid var(--line); border-radius: 8px;
+  padding: 14px 12px; caret-color: var(--accent);
+}
+#scan:focus, #scanT:focus { outline: none; border-color: var(--accent); }
+.hint { margin: 0; color: var(--muted); font-size: 13px; }
+.opt { display: flex; align-items: center; gap: 8px; font-size: 14px; min-height: 32px; }
+.opt input { width: 18px; height: 18px; accent-color: var(--accent); }
+
+.last { display: flex; flex-direction: column; gap: 6px; }
+.last .big { font-family: var(--font-mono); font-weight: 500; font-size: 28px; line-height: 1.15; margin: 0; overflow-wrap: anywhere; }
+.last .big.noname { color: var(--muted); font-family: var(--font-display); font-size: 30px; font-weight: 700; }
+.last .meta { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 13px; color: var(--muted); align-items: center; }
+.last .data { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 8px; margin: 4px 0; }
+.last .data div { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.last .data b { font-size: 16px; font-weight: 600; overflow-wrap: anywhere; }
+.last .note { margin: 0; font-size: 14px; overflow-wrap: anywhere; }
+.chip { display: inline-block; font-size: 12px; font-weight: 600; padding: 2px 8px; border-radius: 999px; background: var(--accent-soft); color: var(--fg); }
+.chip.new { background: var(--warn-soft); color: var(--warn); }
+.last.flash { animation: flash 0.7s ease-out; }
+@keyframes flash { from { background: var(--accent-soft); } to { background: var(--surface); } }
+@media (prefers-reduced-motion: reduce) { .last.flash { animation: none; } }
+
+.btn {
+  border: 1px solid var(--line); background: var(--surface); border-radius: 8px;
+  padding: 10px 14px; font-weight: 500; min-height: 44px;
+}
+.btn.primary { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+.btn.danger { color: var(--danger); }
+.btn.small { min-height: 36px; padding: 6px 12px; font-size: 14px; align-self: flex-start; }
+
+.stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.stat { padding: 10px 12px; display: flex; flex-direction: column; gap: 2px; }
+.stat b { font-family: var(--font-display); font-size: 30px; line-height: 1; font-variant-numeric: tabular-nums; }
+.stat span { font-size: 12px; color: var(--muted); }
+
+.loghead { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--surface); }
+.seg button { border: 0; background: none; padding: 8px 14px; min-height: 40px; font-weight: 500; }
+.seg button[aria-pressed="true"] { background: var(--accent); color: var(--accent-fg); }
+.srch {
+  flex: 1 1 160px; min-width: 0; background: var(--surface); border: 1px solid var(--line);
+  border-radius: 8px; padding: 8px 10px; min-height: 40px;
+}
+ul.rows { list-style: none; margin: 10px 0 0; padding: 0; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); overflow: hidden; }
+ul.rows li + li { border-top: 1px solid var(--line); }
+.row {
+  width: 100%; text-align: left; background: none; border: 0; padding: 10px 12px;
+  display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 2px 12px; align-items: baseline;
+}
+.row time, .row .rt { font-family: var(--font-mono); font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; grid-row: span 2; white-space: nowrap; }
+.row .nm { font-family: var(--font-mono); font-weight: 500; overflow-wrap: anywhere; }
+.row .cd { font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
+.row .nt { font-size: 13px; grid-column: 2; overflow-wrap: anywhere; }
+.row.split { display: flex; align-items: center; justify-content: space-between; gap: 10px; cursor: default; }
+.row.split .info { min-width: 0; display: flex; flex-direction: column; }
+.empty { padding: 22px 14px; text-align: center; color: var(--muted); }
+.empty b { display: block; color: var(--fg); font-family: var(--font-display); font-size: 22px; margin-bottom: 4px; }
+
+/* tropa */
+.tfield { display: flex; flex-direction: column; gap: 4px; }
+#tName { width: 100%; min-width: 0; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 10px; min-height: 44px; }
+.counter { display: flex; align-items: baseline; gap: 8px; }
+.counter b { font-family: var(--font-display); font-size: 44px; line-height: 1; font-variant-numeric: tabular-nums; }
+.btnrow { display: flex; flex-wrap: wrap; gap: 8px; }
+details.tropa { border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+details.tropa + details.tropa { margin-top: 8px; }
+details.tropa summary { padding: 12px; cursor: pointer; display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; font-weight: 600; }
+details.tropa summary span { font-weight: 400; color: var(--muted); font-size: 13px; }
+details.tropa .inner { padding: 0 12px 12px; display: flex; flex-direction: column; gap: 8px; }
+
+/* stock */
+.fgroup { display: flex; flex-direction: column; gap: 6px; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.cbtn { border: 1px solid var(--line); background: var(--surface); border-radius: 999px; padding: 7px 13px; min-height: 40px; font-size: 14px; font-weight: 500; }
+.cbtn[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); }
+.tblwrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+table.tbl { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+.tbl th, .tbl td { padding: 9px 12px; text-align: right; white-space: nowrap; }
+.tbl th:first-child, .tbl td:first-child { text-align: left; white-space: normal; }
+.tbl th { font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+.tbl tr + tr td { border-top: 1px solid var(--line); }
+.tbl tr.tot td { font-weight: 700; background: var(--accent-soft); }
+.result { margin: 0; font-size: 14px; }
+.result b { font-family: var(--font-display); font-size: 28px; }
+
+.sumgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(80px, 1fr)); gap: 8px; margin: 10px 0 4px; }
+.sumgrid div { display: flex; flex-direction: column; background: var(--accent-soft); border-radius: 8px; padding: 8px 10px; }
+.sumgrid b { font-family: var(--font-display); font-size: 28px; line-height: 1; font-variant-numeric: tabular-nums; }
+.sumgrid span { font-size: 12px; color: var(--muted); }
+.tools { display: flex; flex-wrap: wrap; gap: 8px; }
+.confirm { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.confirm p { margin: 0; flex: 1 1 220px; }
+#csvbox { width: 100%; min-height: 120px; font-family: var(--font-mono); font-size: 12px; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 8px; }
+#msg { margin: 0; min-height: 20px; font-size: 13px; color: var(--muted); }
+.fine { margin: 0; font-size: 12px; color: var(--muted); }
+
+.backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.45); z-index: 20; }
+.sheet {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 21;
+  background: var(--surface); border-top: 1px solid var(--line); border-radius: 14px 14px 0 0;
+  padding-top: 16px;
+  padding-bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  max-height: 92%; overflow-y: auto;
+}
+.sheet-in { max-width: 640px; margin: 0 auto; display: flex; flex-direction: column; gap: 10px; }
+.sheet h2 { margin: 0; font-family: var(--font-display); font-size: 24px; text-transform: uppercase; letter-spacing: 0.02em; }
+.sheet .code { font-family: var(--font-mono); font-size: 20px; overflow-wrap: anywhere; }
+.field { display: flex; flex-direction: column; gap: 4px; }
+.field input, .field textarea, .field select {
+  width: 100%; min-width: 0; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 10px; min-height: 44px;
+}
+.field textarea { min-height: 84px; resize: vertical; }
+.two { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; }
+.sheet .acts { display: flex; flex-wrap: wrap; gap: 8px; }
+.intropa { background: var(--warn-soft); color: var(--warn); border-radius: 8px; padding: 8px 10px; font-size: 14px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; justify-content: space-between; }
+
+/* campo, registros, informes */
+[hidden] { display: none !important; }
+:root { --c1: #2a78d6; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --c1: #3987e5; } }
+:root[data-theme="dark"] { --c1: #3987e5; }
+#msg:not(:empty) { position: sticky; bottom: 8px; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; color: var(--fg); z-index: 5; }
+#scanC { width: 100%; min-width: 0; font-family: var(--font-mono); font-size: 22px; font-weight: 500; background: var(--bg); border: 2px solid var(--line); border-radius: 8px; padding: 14px 12px; caret-color: var(--accent); }
+#scanC:focus { outline: none; border-color: var(--accent); }
+.potlist { display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); overflow: hidden; }
+.pot { display: grid; grid-template-columns: 112px 84px minmax(0, 1fr); gap: 10px; align-items: center; padding: 8px 12px; }
+.pot + .pot { border-top: 1px solid var(--line); }
+.pot b { font-family: var(--font-display); font-size: 18px; text-transform: uppercase; letter-spacing: 0.02em; }
+.pot input { width: 100%; min-height: 40px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); padding: 6px 8px; font-family: var(--font-mono); text-align: right; }
+.pot .who { font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
+.lcard { display: flex; flex-direction: column; gap: 8px; }
+.lcard + .lcard { margin-top: 0; }
+#lotes { display: flex; flex-direction: column; gap: 10px; }
+.lhead { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.lhead b { font-family: var(--font-display); font-size: 28px; line-height: 1; text-transform: uppercase; letter-spacing: 0.02em; }
+.potchips .cbtn { min-width: 46px; padding: 7px 8px; text-align: center; }
+.bars { display: flex; flex-direction: column; gap: 6px; }
+.bar { display: grid; grid-template-columns: minmax(80px, 34%) minmax(0, 1fr) auto; gap: 8px; align-items: center; font-size: 13px; }
+.bar .bl { overflow-wrap: anywhere; color: var(--fg); }
+.bar .tr { height: 20px; background: var(--bg); border-radius: 4px; overflow: hidden; }
+.bar .fi { height: 100%; background: var(--c1); border-radius: 0 4px 4px 0; min-width: 2px; }
+.bar .v { font-family: var(--font-mono); font-variant-numeric: tabular-nums; min-width: 52px; text-align: right; }
+</style>
+
+<main class="app">
+  <header>
+    <h1 id="title">Registro de tags</h1>
+    <div class="hactions">
+      <button type="button" class="btn small" id="btnHome" hidden>Menú</button>
+      <button type="button" id="pill" class="pill" aria-live="polite" hidden><i></i><span id="pilltxt">Lector en pausa</span></button>
+    </div>
+  </header>
+
+  <div class="syncbar" id="syncbar" role="status">
+    <i></i><span id="syncTxt">Conectando con Google Sheets...</span>
+    <button type="button" class="btn small" id="btnSync">Sincronizar</button>
+  </div>
+
+  <!-- MENÚ -->
+  <section class="page" id="pgHome">
+    <div class="menu">
+      <button type="button" class="mbtn" id="mNov"><span><b>Cargar novedades</b><small id="mNovSub">Leer tags y cargar los datos</small></span><span class="n" id="mNovN"></span></button>
+      <button type="button" class="mbtn" id="mTropa"><span><b>Crear tropa</b><small id="mTropaSub">Armar una lista y sacarla del stock</small></span><span class="n" id="mTropaN"></span></button>
+      <button type="button" class="mbtn alt" id="mStock"><span><b>Stock de caravanas</b><small id="mStockSub">Animales con caravana por edad y sexo</small></span><span class="n" id="mStockN"></span></button>
+      <button type="button" class="mbtn" id="mCampo"><span><b>Campo y lotes</b><small>Potreros, lotes, cantidades y movimientos</small></span><span class="n" id="mCampoN"></span></button>
+      <button type="button" class="mbtn" id="mReg"><span><b>Registrar</b><small>Nacimientos, muertes, ventas, tacto, vacunas, pesadas</small></span><span class="n" id="mRegN"></span></button>
+      <button type="button" class="mbtn alt" id="mInf"><span><b>Informes</b><small>Preñez, mortandad, ventas, vacunaciones</small></span><span class="n" id="mInfN"></span></button>
+    </div>
+    <h2 class="sec">Datos</h2>
+    <section class="tools" id="tools">
+      <button type="button" class="btn primary" id="btnExpA" hidden>Exportar animales (CSV)</button>
+      <button type="button" class="btn" id="btnExpL" hidden>Exportar lecturas (CSV)</button>
+      <button type="button" class="btn" id="btnImport">Importar planilla</button>
+      <input type="file" id="fileIn" accept=".xlsx,.xls,.csv,.ods" hidden>
+      <button type="button" class="btn" id="btnCopy">Copiar animales</button>
+      <button type="button" class="btn danger" id="btnClear">Borrar lecturas</button>
+    </section>
+    <div class="panel confirm" id="confirm" hidden>
+      <p id="confirmTxt"></p>
+      <button type="button" class="btn danger" id="confirmYes">Sí, borrar</button>
+      <button type="button" class="btn" id="confirmNo">Cancelar</button>
+    </div>
+    <div class="panel confirm" id="imp" hidden>
+      <p id="impTxt"></p>
+      <button type="button" class="btn primary" id="impYes">Importar</button>
+      <button type="button" class="btn" id="impNo">Cancelar</button>
+    </div>
+    <textarea id="csvbox" readonly hidden aria-label="CSV para copiar"></textarea>
+    <p class="fine">Los datos se guardan en tu planilla de Google Sheets "Animales" (hojas Animales, Lecturas, Potreros, Lotes y Movimientos). Si no hay señal, quedan en el celular y se suben solos cuando vuelve la conexión. <a href="https://docs.google.com/spreadsheets/d/1Az3XHrdT0EDWAx9xL2eT5D9uOIAWwGLcyQ_ddqqd_Zk/edit" target="_blank" rel="noopener">Abrir la planilla</a></p>
+  </section>
+
+  <!-- CARGAR NOVEDADES -->
+  <section class="page" id="pgNov" hidden>
+    <section class="panel scan">
+      <label class="label" for="scan">Caravana leída</label>
+      <input id="scan" type="text" inputmode="none" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="Pasá un tag por el lector">
+      <div class="btnrow"><button type="button" class="btn small" id="kbN" aria-pressed="false">Escribir a mano</button><button type="button" class="btn small primary" id="addN">Agregar</button></div>
+      <p class="hint">Mantené este campo activo. El lector escribe la caravana y manda Enter, y la lectura se guarda sola.</p>
+      <label class="opt"><input type="checkbox" id="askNew" checked> Pedir los datos cuando la caravana es nueva</label>
+    </section>
+
+    <section class="panel last" id="last" aria-live="polite"></section>
+
+    <section class="stats">
+      <div class="panel stat"><b id="sToday">0</b><span>Lecturas hoy</span></div>
+      <div class="panel stat"><b id="sTotal">0</b><span>Lecturas</span></div>
+      <div class="panel stat"><b id="sAnim">0</b><span>Animales</span></div>
+    </section>
+
+    <section>
+      <div class="loghead">
+        <div class="seg" role="group" aria-label="Qué listar">
+          <button type="button" id="vLect" aria-pressed="true">Lecturas</button>
+          <button type="button" id="vAnim" aria-pressed="false">Animales</button>
+        </div>
+        <input id="q" class="srch" type="search" placeholder="Buscar caravana, sexo u observación" autocomplete="off">
+      </div>
+      <ul class="rows" id="rows"></ul>
+      <div id="empty" class="panel empty" hidden></div>
+      <div style="margin-top:10px"><button type="button" class="btn small" id="more" hidden>Mostrar más</button></div>
+    </section>
+  </section>
+
+  <!-- CREAR TROPA -->
+  <section class="page" id="pgTropa" hidden>
+    <section class="panel scan">
+      <div class="tfield">
+        <label class="label" for="tName">Nombre de la tropa</label>
+        <input id="tName" type="text" autocomplete="off" maxlength="60" placeholder="Por ejemplo: Venta noviembre">
+      </div>
+      <label class="label" for="scanT">Caravana leída</label>
+      <input id="scanT" type="text" inputmode="none" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="Pasá un tag por el lector">
+      <div class="btnrow"><button type="button" class="btn small" id="kbT" aria-pressed="false">Escribir a mano</button><button type="button" class="btn small primary" id="addT">Agregar</button></div>
+      <p class="hint">Cada caravana que leas se suma a la lista. También podés escribirla y apretar Enter. Al confirmar, salen del stock.</p>
+    </section>
+
+    <section class="panel">
+      <div class="counter"><b id="tCount">0</b><span>animales en la lista</span></div>
+      <div id="tSummary"></div>
+      <ul class="rows" id="tList"></ul>
+      <div id="tEmpty" class="empty"><b>La lista está vacía</b>Pasá los tags de los animales que van en la tropa.</div>
+      <div class="btnrow" style="margin-top:12px">
+        <button type="button" class="btn primary" id="tConfirm">Confirmar tropa</button>
+        <button type="button" class="btn" id="tPdf" hidden>PDF de la lista</button>
+        <button type="button" class="btn danger" id="tClear">Vaciar lista</button>
+      </div>
+    </section>
+
+    <section>
+      <h2 class="sec" style="margin-bottom:8px">Tropas armadas</h2>
+      <div id="tropas"></div>
+      <div id="tropasEmpty" class="panel empty" hidden><b>Todavía no hay tropas</b>Cuando confirmes una aparece acá.</div>
+    </section>
+  </section>
+
+  <!-- STOCK -->
+  <section class="page" id="pgStock" hidden>
+    <section>
+      <div class="tblwrap">
+        <table class="tbl" id="stockTbl" aria-label="Stock por edad"></table>
+      </div>
+      <p class="hint" style="margin-top:6px">Cuenta solo los animales con caravana que están en el stock, sin los que están en una tropa ni los dados de baja. La hacienda sin caravana se ve en Campo y lotes.</p>
+    </section>
+
+    <section class="panel" id="stockFilters">
+      <div class="fgroup">
+        <span class="label">Edad</span>
+        <div class="chips" id="fAge"></div>
+      </div>
+      <div class="fgroup" style="margin-top:12px">
+        <span class="label">Sexo</span>
+        <div class="chips" id="fSex"></div>
+      </div>
+    </section>
+
+    <section>
+      <p class="result" id="stockResult"></p>
+      <ul class="rows" id="sRows"></ul>
+      <div id="sEmpty" class="panel empty" hidden><b>No hay animales con ese filtro</b>Probá con otra edad o sacá algún filtro.</div>
+      <div style="margin-top:10px"><button type="button" class="btn small" id="sMore" hidden>Mostrar más</button></div>
+    </section>
+  </section>
+
+  <!-- CAMPO -->
+  <section class="page" id="pgCampo" hidden>
+    <section class="panel" id="campoSum"></section>
+    <div class="seg" id="campoVista" role="group" aria-label="Vista" style="align-self:flex-start"><button type="button" data-cv="lista" aria-pressed="true">Lista</button><button type="button" data-cv="mapa" aria-pressed="false">Mapa</button></div>
+    <section class="panel" id="mapaBox" hidden></section>
+    <div id="campoLista" style="display:flex;flex-direction:column;gap:16px">
+    <div class="btnrow"><button type="button" class="btn primary" id="lNuevo">Nuevo lote</button></div>
+    <div id="lotes"></div>
+    <h2 class="sec">Potreros</h2>
+    <div class="potlist" id="potList"></div>
+    <p class="fine" id="potFoot"></p>
+    </div>
+  </section>
+
+  <!-- REGISTRAR -->
+  <section class="page" id="pgReg" hidden>
+    <div class="chips" id="regTipos"></div>
+    <section class="panel" id="regForm" style="display:flex;flex-direction:column;gap:10px"></section>
+    <section class="panel scan" id="regCar" hidden>
+      <p class="hint">Al vacunar los terneros nacidos, pasá el tag de cada uno. Quedan cargados en el lote y se descuentan de los terneros o terneras sin caravana, según el sexo que elijas.</p>
+      <div class="two">
+        <div class="field"><label class="label" for="cLote">Lote</label><select id="cLote"></select></div>
+        <div class="field"><label class="label" for="cSexo">Sexo</label><select id="cSexo"><option value="Macho">Macho</option><option value="Hembra">Hembra</option></select></div>
+      </div>
+      <div class="field"><label class="label" for="cNac">Nacimiento (opcional)</label><input id="cNac" type="date"></div>
+      <label class="opt"><input type="checkbox" id="cVac" checked> Registrar la vacunación de estos terneros</label>
+      <input id="cVacN" type="text" class="srch" value="Aftosa" aria-label="Vacuna aplicada" autocomplete="off">
+      <p class="hint" id="cHint"></p>
+      <label class="label" for="scanC">Caravana leída</label>
+      <input id="scanC" type="text" inputmode="none" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="Pasá un tag por el lector">
+      <div class="btnrow"><button type="button" class="btn small" id="kbC" aria-pressed="false">Escribir a mano</button><button type="button" class="btn small primary" id="addC">Agregar</button></div>
+      <div class="counter"><b id="cCount">0</b><span>terneros en la lista</span></div>
+      <ul class="rows" id="cList"></ul>
+      <div class="btnrow"><button type="button" class="btn primary" id="cConfirm">Confirmar caravaneo</button><button type="button" class="btn danger" id="cClear">Vaciar lista</button></div>
+    </section>
+    <section>
+      <h2 class="sec" style="margin-bottom:8px">Últimos registros</h2>
+      <ul class="rows" id="regList"></ul>
+      <div id="regEmpty" class="panel empty" hidden><b>Todavía no hay registros</b>Lo que guardes acá aparece en esta lista.</div>
+    </section>
+  </section>
+
+  <!-- INFORMES -->
+  <section class="page" id="pgInf" hidden>
+    <div class="chips" id="infYears"></div>
+    <div id="infBody" style="display:flex;flex-direction:column;gap:18px"></div>
+    <div class="btnrow"><button type="button" class="btn primary" id="infPdf" hidden>Descargar informe en PDF</button></div>
+  </section>
+
+  <p id="msg" role="status"></p>
+</main>
+
+<div class="backdrop" id="backdrop" hidden></div>
+<div class="sheet" id="sheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle" hidden>
+  <div class="sheet-in">
+    <h2 id="sheetTitle">Datos del animal</h2>
+    <div class="code" id="sheetCode"></div>
+    <div class="intropa" id="sheetTropa" hidden><span id="sheetTropaTxt"></span><button type="button" class="btn small" id="sheetBack">Devolver al stock</button></div>
+    <div class="two">
+      <div class="field">
+        <label class="label" for="fNac">Nacimiento</label>
+        <input id="fNac" type="date">
+      </div>
+      <div class="field">
+        <label class="label" for="fSexo">Sexo</label>
+        <select id="fSexo">
+          <option value="">Sin dato</option>
+          <option value="Macho">Macho</option>
+          <option value="Hembra">Hembra</option>
+        </select>
+      </div>
+    </div>
+    <div class="field">
+      <label class="label" for="fLote">Lote</label>
+      <select id="fLote"></select>
+    </div>
+    <div class="intropa" id="sheetBaja" hidden><span id="sheetBajaTxt"></span><button type="button" class="btn small" id="sheetRepo">Reponer</button></div>
+    <div class="field">
+      <label class="label" for="fObs">Observaciones</label>
+      <textarea id="fObs" maxlength="1000"></textarea>
+    </div>
+    <div class="acts">
+      <button type="button" class="btn primary" id="sheetSave">Guardar</button>
+      <button type="button" class="btn" id="sheetCancel">Cancelar</button>
+      <button type="button" class="btn danger" id="sheetDelL" hidden>Borrar esta lectura</button>
+      <button type="button" class="btn danger" id="sheetDelA" hidden>Borrar datos del animal</button>
+    </div>
+  </div>
+</div>
+
+<div class="backdrop" id="cback" hidden></div>
+<div class="sheet" id="csheet" role="dialog" aria-modal="true" hidden>
+  <div class="sheet-in" id="csheetIn"></div>
+</div>
+
+<script>
+(function () {
+  var SSID = '1Az3XHrdT0EDWAx9xL2eT5D9uOIAWwGLcyQ_ddqqd_Zk';
+  var SERVER = 'Google Sheets';
+  var SHEET_ANIMALES = 0, SHEET_LECTURAS = 1, SHEET_MOVS = 6;
+  var NPOT = 14, CAMPO_HA = 600;
+  var CATS = ['Vacas', 'Vaquillonas', 'Toros', 'Novillos', 'Terneros s/caravana', 'Terneras s/caravana'];
+  var TAGCAT = 'Terneros c/caravana';
+  var TAGCAT2 = 'Terneras c/caravana';
+  var CATS_ALL = CATS.concat([TAGCAT, TAGCAT2]);
+  function isTag(c) { return c === TAGCAT || c === TAGCAT2; }
+  function sexCat(sx) { return sx === 'Hembra' ? CATS[5] : CATS[4]; }
+  function tagCat(sx) { return sx === 'Hembra' ? TAGCAT2 : TAGCAT; }
+  var TIPOS = { nacimiento: 'Nacimiento', muerte: 'Muerte', venta: 'Venta', tacto: 'Tacto', vacunacion: 'Vacunación', pesada: 'Pesada', traslado: 'Traslado', alta: 'Ajuste de cantidades', caravaneo: 'Caravaneo' };
+  function defaultPot() { var a = []; for (var i = 1; i <= NPOT; i++) a.push({ n: i, ha: CAMPO_HA / NPOT }); return a; }
+  var $ = function (id) { return document.getElementById(id); };
+
+  var base = { animals: new Map(), rowOf: new Map(), lecturas: [], movs: [], lotes: new Map(), lotesRow: new Map(), potreros: defaultPot() };
+  var lotes = new Map(), potreros = defaultPot(), movs = [], stk = new Map();  // lo último que hay en la planilla (o en el respaldo)
+  var outbox = [];           // cambios hechos en el celular que todavía no subieron
+  var animals = new Map();   // vista = base + pendientes
+  var lecturas = [];         // vista, más nueva primero: {id, ts, caravana, row}
+  var counts = new Map();
+  var curView = 'home';
+  var listView = 'lect', query = '', shown = 60;
+  var stockF = { age: 'all', sexo: 'all' }, shownS = 80;
+  var draft = { name: '', codes: [] };
+  var editing = null;
+  var lastCode = '', lastAt = 0;
+  var downloads = null, mcp = null;
+  var audioCtx = null, msgTimer = null, flashNext = false;
+  var loadedOnce = false, lastErr = null, flushTimer = null;
+  var readyResolve, ready = new Promise(function (r) { readyResolve = r; });
+
+  var TITLES = { home: 'Registro de tags', nov: 'Cargar novedades', tropa: 'Crear tropa', stock: 'Stock de caravanas', campo: 'Campo y lotes', reg: 'Registrar', inf: 'Informes' };
+  var BUCKETS = [
+    { id: 'b0', label: 'Menos de 1 año' },
+    { id: 'b1', label: '1 a 2 años' },
+    { id: 'b2', label: '2 a 3 años' },
+    { id: 'b3', label: '3 años o más' },
+    { id: 'bx', label: 'Sin fecha de nacimiento' }
+  ];
+
+  /* ---------- utilidades ---------- */
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+  function pad(n) { return n < 10 ? '0' + n : '' + n; }
+  function fmtTime(ts) {
+    var d = new Date(ts), now = new Date();
+    var h = pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
+    if (d.toDateString() === now.toDateString()) return h;
+    return pad(d.getDate()) + '/' + pad(d.getMonth() + 1) + ' ' + h;
+  }
+  function fmtIso(ts) {
+    var d = new Date(ts);
+    return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + ' ' +
+      pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
+  }
+  function fmtDate(iso) {
+    if (!iso) return '';
+    var p = iso.split('-');
+    return p.length === 3 ? p[2] + '/' + p[1] + '/' + p[0] : iso;
+  }
+  function todayStr() {
+    var d = new Date();
+    return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+  }
+  function ageMonths(iso) {
+    if (!iso) return null;
+    var p = iso.split('-').map(Number);
+    if (p.length !== 3 || !p[0]) return null;
+    var b = new Date(p[0], p[1] - 1, p[2]), n = new Date();
+    if (b > n) return null;
+    var m = (n.getFullYear() - b.getFullYear()) * 12 + n.getMonth() - b.getMonth();
+    if (n.getDate() < b.getDate()) m--;
+    return Math.max(m, 0);
+  }
+  function edad(iso) {
+    var m = ageMonths(iso);
+    if (m === null) return '';
+    if (m < 1) {
+      var p = iso.split('-').map(Number);
+      var d = Math.floor((new Date() - new Date(p[0], p[1] - 1, p[2])) / 86400000);
+      return d + (d === 1 ? ' día' : ' días');
+    }
+    var a = Math.floor(m / 12), r = m % 12, out = [];
+    if (a) out.push(a + (a === 1 ? ' año' : ' años'));
+    if (r) out.push(r + (r === 1 ? ' mes' : ' meses'));
+    return out.join(' ');
+  }
+  function bucketOf(a) {
+    var m = ageMonths(a.nacimiento);
+    if (m === null) return 'bx';
+    if (m < 12) return 'b0';
+    if (m < 24) return 'b1';
+    if (m < 36) return 'b2';
+    return 'b3';
+  }
+  function say(t) {
+    $('msg').textContent = t;
+    clearTimeout(msgTimer);
+    if (t) msgTimer = setTimeout(function () { $('msg').textContent = ''; }, 7000);
+  }
+  function lsGet(k) { try { var v = localStorage.getItem(k); return v ? JSON.parse(v) : null; } catch (e) { return null; } }
+  function lsSet(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} }
+  function recRow(r) { return [r.caravana, r.nacimiento || '', r.sexo || '', r.observaciones || '', r.tropa || '', r.fechaTropa || '', r.lote || '', r.baja || '', r.fechaBaja || '']; }
+  function movRow(r) { return [r.fecha, r.tipo, r.lote, r.cat, r.n, r.f || '', r.g || '', r.h || '', r.obs || '', r.id]; }
+  function loteRow(r) { return [r.name, r.potreros.join(','), r.estado || 'Activo', r.obs || '']; }
+  function mkRec(code, patch) {
+    var o = animals.get(code) || {};
+    var r = { caravana: code, nacimiento: o.nacimiento || '', sexo: o.sexo || '', observaciones: o.observaciones || '', tropa: o.tropa || '', fechaTropa: o.fechaTropa || '', lote: o.lote || '', baja: o.baja || '', fechaBaja: o.fechaBaja || '' };
+    return Object.assign(r, patch || {});
+  }
+
+  /* ---------- respaldo en el celular ---------- */
+  function saveCache() {
+    lsSet('rt_cache_v3', {
+      a: Array.from(base.animals.values()),
+      l: base.lecturas.slice(0, 5000).map(function (x) { return { ts: x.ts, caravana: x.caravana }; }),
+      m: base.movs.slice(-4000),
+      lo: Array.from(base.lotes.values()),
+      p: base.potreros
+    });
+  }
+  function persistOutbox() { lsSet('rt_outbox_v3', outbox); }
+  function saveDraft() { lsSet('rt_tropa_draft', draft); }
+  function loadLocal() {
+    var c = lsGet('rt_cache_v3') || lsGet('rt_cache_v2');
+    if (c) {
+      base.animals = new Map((c.a || []).map(function (a) { return [a.caravana, a]; }));
+      base.lecturas = (c.l || []).map(function (x, i) { return { id: 'c' + i, ts: x.ts, caravana: x.caravana, row: null }; });
+      base.movs = c.m || [];
+      base.lotes = new Map((c.lo || []).map(function (l) { return [l.name, l]; }));
+      if (c.p && c.p.length === NPOT) base.potreros = c.p;
+    }
+    var o = lsGet('rt_outbox_v3') || lsGet('rt_outbox_v2');
+    if (o && o.length) outbox = o;
+    var d = lsGet('rt_tropa_draft');
+    if (d && Array.isArray(d.codes)) draft = { name: d.name || '', codes: d.codes };
+  }
+
+  /* ---------- vista = respaldo + pendientes ---------- */
+  function rebuild() {
+    animals = new Map(base.animals);
+    lotes = new Map(base.lotes);
+    potreros = base.potreros.map(function (p) { return { n: p.n, ha: p.ha }; });
+    var pm = [];
+    var lec = base.lecturas.slice();
+    outbox.forEach(function (op) {
+      if (op.t === 'L') lec.push({ id: 'p' + op.rec.ts + '-' + op.rec.caravana, ts: op.rec.ts, caravana: op.rec.caravana, row: null, pending: true });
+      else if (op.t === 'A') animals.set(op.rec.caravana, op.rec);
+      else if (op.t === 'M') pm.push(Object.assign({}, op.rec, { pending: true, row: null }));
+      else if (op.t === 'T') lotes.set(op.rec.name, op.rec);
+      else if (op.t === 'P') potreros[op.rec.n - 1] = { n: op.rec.n, ha: op.rec.ha };
+    });
+    movs = base.movs.concat(pm);
+    computeStock();
+    lec.sort(function (x, y) { return y.ts - x.ts; });
+    lecturas = lec;
+    counts = new Map();
+    lecturas.forEach(function (l) { counts.set(l.caravana, (counts.get(l.caravana) || 0) + 1); });
+    render();
+    updateSyncUi();
+  }
+  function countFor(code) { return counts.get(code) || 0; }
+
+  /* ---------- Google Sheets ---------- */
+  function S(tool, input) {
+    var args = Object.assign({ spreadsheetId: SSID }, input);
+    return mcp.callTool(SERVER, tool, args, { cache: false });
+  }
+  function valuesOf(r) {
+    var p = r && (r.payload != null ? r.payload : r.structuredContent);
+    if (typeof p === 'string') { try { p = JSON.parse(p); } catch (e) { p = null; } }
+    return (p && p.values) || [];
+  }
+  async function loadAll() {
+    var ra = await S('get_values', { range: 'Animales!A2:I' });
+    var rl = await S('get_values', { range: 'Lecturas!A2:C' });
+    var rp = await S('get_values', { range: 'Potreros!A2:B' });
+    var rlo = await S('get_values', { range: 'Lotes!A2:D' });
+    var rm = await S('get_values', { range: 'Movimientos!A2:J' });
+    var am = new Map(), rowOf = new Map();
+    valuesOf(ra).forEach(function (r, i) {
+      var code = String((r && r[0]) == null ? '' : r[0]).trim();
+      if (!code) return;
+      am.set(code, {
+        caravana: code,
+        nacimiento: toIso(r[1]),
+        sexo: toSexo(r[2]),
+        observaciones: String(r[3] == null ? '' : r[3]),
+        tropa: String(r[4] == null ? '' : r[4]).trim(),
+        fechaTropa: toIso(r[5]),
+        lote: String(r[6] == null ? '' : r[6]).trim(),
+        baja: String(r[7] == null ? '' : r[7]).trim(),
+        fechaBaja: toIso(r[8])
+      });
+      rowOf.set(code, i + 2);
+    });
+    var lec = [];
+    valuesOf(rl).forEach(function (r, i) {
+      var code = String((r && r[1]) == null ? '' : r[1]).trim();
+      if (!code) return;
+      var ts = Number(r[2]);
+      if (!ts) { var d = Date.parse(String(r[0]).replace(' ', 'T')); ts = d || 0; }
+      lec.push({ id: 'r' + (i + 2), ts: ts, caravana: code, row: i + 2 });
+    });
+    var pots = defaultPot().map(function (q) { return { n: q.n, ha: 0 }; });
+    valuesOf(rp).forEach(function (r) {
+      var n = parseInt(r && r[0], 10), ha = num(r && r[1]);
+      if (n >= 1 && n <= NPOT && r[1] !== '' && r[1] != null) pots[n - 1].ha = ha;
+    });
+    var lm = new Map(), lrow = new Map();
+    valuesOf(rlo).forEach(function (r, i) {
+      var name = String((r && r[0]) == null ? '' : r[0]).trim();
+      if (!name) return;
+      lm.set(name, {
+        name: name,
+        potreros: String(r[1] == null ? '' : r[1]).split(/[,;\s]+/).map(Number).filter(function (n) { return n >= 1 && n <= NPOT; }),
+        estado: String(r[2] == null ? '' : r[2]).trim() === 'Cerrado' ? 'Cerrado' : 'Activo',
+        obs: String(r[3] == null ? '' : r[3])
+      });
+      lrow.set(name, i + 2);
+    });
+    var mv = [];
+    valuesOf(rm).forEach(function (r, i) {
+      if (!r || !r[1] || !r[9]) return;
+      mv.push({ fecha: toIso(r[0]) || String(r[0] || ''), tipo: String(r[1]), lote: String(r[2] == null ? '' : r[2]), cat: String(r[3] == null ? '' : r[3]), n: num(r[4]),
+        f: String(r[5] == null ? '' : r[5]), g: String(r[6] == null ? '' : r[6]), h: String(r[7] == null ? '' : r[7]), obs: String(r[8] == null ? '' : r[8]), id: String(r[9]), row: i + 2 });
+    });
+    base = { animals: am, rowOf: rowOf, lecturas: lec, movs: mv, lotes: lm, lotesRow: lrow, potreros: pots };
+    loadedOnce = true;
+    saveCache();
+    rebuild();
+  }
+
+  var chain = Promise.resolve();
+  function exclusive(fn) {
+    var run = chain.then(fn);
+    chain = run.catch(function () {});
+    return run;
+  }
+  var flushPromise = null, flushQueued = false;
+  function requestFlush() {
+    if (!mcp) return Promise.resolve();
+    if (flushQueued) return flushPromise;
+    flushQueued = true;
+    flushPromise = exclusive(async function () { flushQueued = false; await doFlush(); });
+    return flushPromise;
+  }
+  function scheduleFlush() {
+    return; // manual: solo sube con el botón Sincronizar
+    flushTimer = setTimeout(function () { flushTimer = null; requestFlush(); }, 1500);
+  }
+  function takeRun(t, max) {
+    var k = 0;
+    while (k < outbox.length && k < max && outbox[k].t === t) k++;
+    return k;
+  }
+  async function doFlush() {
+    if (!mcp) return;
+    setSync('busy');
+    try {
+      if (!loadedOnce) await loadAll();
+      while (outbox.length) {
+        var t = outbox[0].t, k = takeRun(t, 100), taken = outbox.slice(0, k);
+        var needCheck = taken.some(function (o) { return o.tried; });
+        if (needCheck) await loadAll();
+        taken.forEach(function (o) { o.tried = true; });
+        persistOutbox();
+        if (t === 'L') {
+          var fresh = needCheck ? taken.filter(function (o) {
+            return !base.lecturas.some(function (l) { return l.ts === o.rec.ts && l.caravana === o.rec.caravana; });
+          }) : taken;
+          if (fresh.length) {
+            await S('append_values', {
+              range: 'Lecturas!A:C',
+              values: fresh.map(function (o) { return [fmtIso(o.rec.ts), o.rec.caravana, String(o.rec.ts)]; })
+            });
+          }
+        } else if (t === 'M') {
+          var freshM = needCheck ? taken.filter(function (o) {
+            return !base.movs.some(function (m) { return m.id === o.rec.id; });
+          }) : taken;
+          if (freshM.length) {
+            await S('append_values', { range: 'Movimientos!A:J', values: freshM.map(function (o) { return movRow(o.rec); }) });
+          }
+        } else if (t === 'P') {
+          var lp = new Map();
+          taken.forEach(function (o) { lp.set(o.rec.n, o.rec.ha); });
+          for (var pe of lp) await S('update_values', { range: 'Potreros!B' + (pe[0] + 1), values: [[pe[1]]] });
+        } else if (t === 'T') {
+          var lt = new Map(), addsT = [], upsT = [];
+          taken.forEach(function (o) { lt.set(o.rec.name, o.rec); });
+          lt.forEach(function (rec, name) {
+            var row = base.lotesRow.get(name);
+            if (row) upsT.push({ rec: rec, row: row }); else addsT.push(rec);
+          });
+          for (var ui = 0; ui < upsT.length; ui++) {
+            await S('update_values', { range: 'Lotes!A' + upsT[ui].row + ':D' + upsT[ui].row, values: [loteRow(upsT[ui].rec)] });
+          }
+          if (addsT.length) await S('append_values', { range: 'Lotes!A:D', values: addsT.map(loteRow) });
+        } else {
+          var latest = new Map();
+          taken.forEach(function (o) { latest.set(o.rec.caravana, o.rec); });
+          var adds = [];
+          var ups = [];
+          latest.forEach(function (rec, code) {
+            var row = base.rowOf.get(code);
+            if (row) ups.push({ rec: rec, row: row }); else adds.push(rec);
+          });
+          for (var u = 0; u < ups.length; u++) {
+            await S('update_values', { range: 'Animales!A' + ups[u].row + ':I' + ups[u].row, values: [recRow(ups[u].rec)] });
+          }
+          if (adds.length) await S('append_values', { range: 'Animales!A:I', values: adds.map(recRow) });
+        }
+        outbox.splice(0, k);
+        persistOutbox();
+        if ((t === 'A' || t === 'T') && outbox.some(function (o) { return o.t === t; })) await loadAll();
+      }
+      await loadAll();
+      lastErr = null;
+      setSync('ok');
+    } catch (e) {
+      lastErr = e || { code: 'upstream_error' };
+      setSync('err');
+    }
+  }
+
+  function errText(e) {
+    var c = e && e.code;
+    if (c === 'needs_reauth') return 'Hay que volver a conectar Google Sheets con el engranaje.';
+    if (c === 'server_not_connected' || c === 'server_not_found' || c === 'selection_required') return 'Google Sheets no está conectado. Usá el engranaje para conectarlo.';
+    if (c === 'not_in_manifest' || c === 'approval_required' || c === 'blocked_by_policy') return 'Falta el permiso para que esta página use Google Sheets. Tocá Sincronizar y aceptá.';
+    if (c === 'tool_error') return 'Google Sheets rechazó la operación' + (e.message ? ': ' + String(e.message).slice(0, 120) : '.');
+    return 'Sin conexión con Google Sheets.';
+  }
+  function autoRetryOk() {
+    var c = lastErr && lastErr.code;
+    return !c || ['needs_reauth', 'server_not_connected', 'server_not_found', 'selection_required', 'not_in_manifest', 'approval_required', 'blocked_by_policy', 'tool_error'].indexOf(c) < 0;
+  }
+  var syncState = 'init';
+  function setSync(s) { syncState = s; updateSyncUi(); }
+  function updateSyncUi() {
+    var bar = $('syncbar'), txt = $('syncTxt'), n = outbox.length, cls = '', msg = '';
+    if (!mcp) {
+      cls = 'err'; msg = 'Todavía no está conectada a Google Sheets. Los datos quedan solo en este celular. Tocá el engranaje ⚙ para conectar la planilla.';
+    } else if (syncState === 'busy') {
+      cls = 'busy'; msg = n ? 'Subiendo ' + n + ' cambios a Google Sheets...' : 'Sincronizando con Google Sheets...';
+    } else if (syncState === 'err') {
+      cls = 'err'; msg = errText(lastErr) + (n ? ' ' + n + ' cambios sin subir.' : '');
+    } else if (syncState === 'ok') {
+      cls = n ? 'busy' : 'ok'; msg = n ? n + ' cambios sin subir. Tocá Sincronizar cuando quieras.' : 'Todo guardado en Google Sheets.';
+    } else {
+      msg = 'Conectando con Google Sheets...';
+    }
+    bar.className = 'syncbar ' + cls;
+    txt.textContent = msg;
+    $('btnSync').disabled = !mcp || syncState === 'busy';
+    $('btnSync').textContent = n ? 'Sincronizar (' + n + ')' : 'Sincronizar';
+  }
+  $('btnSync').onclick = function () { requestFlush(); focusScan(); };
+
+  /* ---------- cambios ---------- */
+  function commit(op, silent) {
+    if (!mcp) {
+      if (op.t === 'L') base.lecturas.unshift({ id: 'l' + op.rec.ts + '-' + Math.random().toString(36).slice(2, 6), ts: op.rec.ts, caravana: op.rec.caravana, row: null });
+      else if (op.t === 'A') base.animals.set(op.rec.caravana, op.rec);
+      else if (op.t === 'M') base.movs.push(Object.assign({}, op.rec));
+      else if (op.t === 'T') base.lotes.set(op.rec.name, op.rec);
+      else if (op.t === 'P') base.potreros[op.rec.n - 1] = { n: op.rec.n, ha: op.rec.ha };
+      saveCache();
+      if (!silent) rebuild();
+      return;
+    }
+    outbox.push(op);
+    persistOutbox();
+    if (!silent) { rebuild(); scheduleFlush(); }
+  }
+  async function verifyCell(range, expected) {
+    var v = valuesOf(await S('get_values', { range: range }));
+    return !!(v[0] && String(v[0][0]) === String(expected));
+  }
+  async function deleteRow(sheetId, row) {
+    await S('update_spreadsheet', { requests: [{ deleteDimension: { range: { sheetId: sheetId, dimension: 'ROWS', startIndex: row - 1, endIndex: row } } }] });
+  }
+  async function removeLectura(item) {
+    if (!mcp) {
+      base.lecturas = base.lecturas.filter(function (l) { return l.id !== item.id; });
+      saveCache(); rebuild(); return;
+    }
+    if (item.pending) {
+      var i = outbox.findIndex(function (o) { return o.t === 'L' && o.rec.ts === item.ts && o.rec.caravana === item.caravana; });
+      if (i >= 0) { outbox.splice(i, 1); persistOutbox(); }
+      rebuild(); return;
+    }
+    if (!item.row) throw { code: 'tool_error', message: 'Esperá a que termine de sincronizar y probá de nuevo.' };
+    await exclusive(async function () {
+      if (!(await verifyCell('Lecturas!C' + item.row, item.ts))) {
+        await loadAll();
+        throw { code: 'tool_error', message: 'La planilla cambió. Revisá la lista y probá de nuevo.' };
+      }
+      await deleteRow(SHEET_LECTURAS, item.row);
+      await loadAll();
+    });
+  }
+  async function removeAnimal(code) {
+    outbox = outbox.filter(function (o) { return !(o.t === 'A' && o.rec.caravana === code); });
+    persistOutbox();
+    if (!mcp) { base.animals.delete(code); saveCache(); rebuild(); return; }
+    var row = base.rowOf.get(code);
+    if (!row) { rebuild(); return; }
+    await exclusive(async function () {
+      if (!(await verifyCell('Animales!A' + row, code))) {
+        await loadAll();
+        throw { code: 'tool_error', message: 'La planilla cambió. Revisá la lista y probá de nuevo.' };
+      }
+      await deleteRow(SHEET_ANIMALES, row);
+      await loadAll();
+    });
+  }
+  async function clearLecturas() {
+    outbox = outbox.filter(function (o) { return o.t !== 'L'; });
+    persistOutbox();
+    if (!mcp) { base.lecturas = []; saveCache(); rebuild(); return; }
+    await exclusive(async function () {
+      await S('batch_clear_values', { ranges: ['Lecturas!A2:C'] });
+      await loadAll();
+    });
+  }
+
+  /* ---------- sonido y vibración ---------- */
+  function prepAudio() {
+    try {
+      var AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return null;
+      if (!audioCtx) audioCtx = new AC();
+      if (audioCtx.state === 'suspended') audioCtx.resume();
+      return audioCtx;
+    } catch (e) { return null; }
+  }
+  function tone(ctx, freq, start, dur) {
+    var o = ctx.createOscillator(), g = ctx.createGain();
+    o.type = 'square'; o.frequency.value = freq;
+    g.gain.setValueAtTime(0.0001, start);
+    g.gain.exponentialRampToValueAtTime(0.22, start + 0.01);
+    g.gain.exponentialRampToValueAtTime(0.0001, start + dur);
+    o.connect(g); g.connect(ctx.destination);
+    o.start(start); o.stop(start + dur + 0.02);
+  }
+  function beep() {
+    try {
+      var ctx = prepAudio();
+      if (ctx) {
+        var t = ctx.currentTime;
+        tone(ctx, 1200, t, 0.08);
+        tone(ctx, 1600, t + 0.09, 0.1);
+      }
+    } catch (e) {}
+    try { if (navigator.vibrate) navigator.vibrate(40); } catch (e) {}
+  }
+  function beepErr() {
+    try {
+      var ctx = prepAudio();
+      if (ctx) tone(ctx, 300, ctx.currentTime, 0.25);
+    } catch (e) {}
+    try { if (navigator.vibrate) navigator.vibrate([60, 40, 60]); } catch (e) {}
+  }
+  ['pointerdown', 'keydown'].forEach(function (ev) {
+    document.addEventListener(ev, prepAudio, { passive: true });
+  });
+
+  /* ---------- navegación ---------- */
+  function hasScanner() { return curView === 'nov' || curView === 'tropa' || (curView === 'reg' && regTipo === 'car'); }
+  function currentScan() { return curView === 'nov' ? $('scan') : curView === 'tropa' ? $('scanT') : (curView === 'reg' && regTipo === 'car') ? $('scanC') : null; }
+  function focusScan() {
+    var el = currentScan();
+    if (!el) return;
+    try { el.focus({ preventScroll: true }); } catch (e) { el.focus(); }
+  }
+  function showView(v) {
+    curView = v;
+    ['home', 'nov', 'tropa', 'stock', 'campo', 'reg', 'inf'].forEach(function (id) {
+      $('pg' + id.charAt(0).toUpperCase() + id.slice(1)).hidden = id !== v;
+    });
+    $('btnHome').hidden = v === 'home';
+    $('pill').hidden = !hasScanner();
+    $('title').textContent = TITLES[v];
+    $('msg').textContent = '';
+    if (v === 'stock') shownS = 80;
+    if (v === 'reg') renderReg();
+    if (v === 'inf') renderInf();
+    render();
+    try { window.scrollTo(0, 0); } catch (e) {}
+    if (hasScanner()) focusScan();
+  }
+  $('btnHome').onclick = function () { showView('home'); };
+  $('mNov').onclick = function () { showView('nov'); };
+  $('mTropa').onclick = function () { showView('tropa'); };
+  $('mStock').onclick = function () { showView('stock'); };
+  $('mCampo').onclick = function () { showView('campo'); };
+  $('mReg').onclick = function () { showView('reg'); };
+  $('mInf').onclick = function () { showView('inf'); };
+
+  function render() {
+    if (curView === 'home') renderHome();
+    else if (curView === 'nov') { renderLast(); renderStats(); renderList(); }
+    else if (curView === 'tropa') renderTropa();
+    else if (curView === 'stock') renderStock();
+    else if (curView === 'campo') renderCampo();
+    else if (curView === 'reg') { if (regTipo === 'car') renderCarList(); renderRegList(); }
+    else if (curView === 'inf') renderInf();
+  }
+  function stockList() {
+    return Array.from(animals.values()).filter(function (a) { return !a.tropa && !a.baja; });
+  }
+  function tropasMap() {
+    var m = new Map();
+    animals.forEach(function (a) {
+      if (!a.tropa) return;
+      var t = m.get(a.tropa);
+      if (!t) { t = { name: a.tropa, fecha: a.fechaTropa || '', codes: [] }; m.set(a.tropa, t); }
+      if (a.fechaTropa && (!t.fecha || a.fechaTropa > t.fecha)) t.fecha = a.fechaTropa;
+      t.codes.push(a.caravana);
+    });
+    return m;
+  }
+
+  /* ---------- menú ---------- */
+  function renderHome() {
+    var start = new Date(); start.setHours(0, 0, 0, 0);
+    var today = 0;
+    for (var i = 0; i < lecturas.length; i++) if (lecturas[i].ts >= start.getTime()) today++;
+    $('mNovN').textContent = today + ' hoy';
+    $('mTropaN').textContent = draft.codes.length ? draft.codes.length + ' en la lista' : tropasMap().size + ' armadas';
+    $('mStockN').textContent = stockList().length + ' caravanas';
+    var al = activeLotes(), cab = 0;
+    al.forEach(function (l) { cab += loteTotal(stk.get(l.name)); });
+    $('mCampoN').textContent = al.length + (al.length === 1 ? ' lote' : ' lotes') + (cab ? ' · ' + cab + ' cab.' : '');
+    $('mRegN').textContent = movs.length ? movs.length + ' reg.' : '';
+  }
+
+  /* ---------- cargar novedades ---------- */
+  async function handleScan(code) {
+    var now = Date.now();
+    if (code === lastCode && now - lastAt < 1200) { lastAt = now; say('Lectura repetida ignorada.'); return; }
+    lastCode = code; lastAt = now;
+    beep();
+    await Promise.race([ready, new Promise(function (r) { setTimeout(r, 3000); })]);
+    var isNew = !animals.has(code);
+    flashNext = true;
+    commit({ t: 'L', rec: { ts: Date.now(), caravana: code } });
+    if (isNew && $('askNew').checked && !editing) openSheet(code, null);
+  }
+  function renderLast() {
+    var box = $('last');
+    if (!lecturas.length) {
+      box.innerHTML = '<span class="label">Última lectura</span><p class="big noname">Sin lecturas todavía</p>';
+      return;
+    }
+    var s = lecturas[0], a = animals.get(s.caravana), n = countFor(s.caravana);
+    var h = '<span class="label">Última lectura</span><p class="big">' + esc(s.caravana) + '</p>';
+    h += '<div class="meta"><span>' + esc(fmtTime(s.ts)) + '</span>';
+    h += (n === 1 ? '<span class="chip new">Primera vez</span>' : '<span class="chip">' + n + ' lecturas</span>');
+    if (!a) h += '<span class="chip new">Sin datos del animal</span>';
+    if (a && a.tropa) h += '<span class="chip new">En tropa ' + esc(a.tropa) + '</span>';
+    if (a && a.baja) h += '<span class="chip new">Baja: ' + esc(a.baja) + '</span>';
+    if (a && a.lote) h += '<span class="chip">Lote ' + esc(a.lote) + '</span>';
+    h += '</div>';
+    if (a) {
+      h += '<div class="data">';
+      h += '<div><span class="label">Sexo</span><b>' + esc(a.sexo || 'Sin dato') + '</b></div>';
+      var ed = edad(a.nacimiento);
+      h += '<div><span class="label">Nacimiento</span><b>' + (a.nacimiento ? esc(fmtDate(a.nacimiento)) : 'Sin dato') + '</b>' + (ed ? '<span class="hint">' + esc(ed) + '</span>' : '') + '</div>';
+      h += '</div>';
+      if (a.observaciones) h += '<p class="note">' + esc(a.observaciones) + '</p>';
+    }
+    h += '<button type="button" class="btn small" id="lastEdit">' + (a ? 'Editar datos' : 'Cargar datos') + '</button>';
+    box.innerHTML = h;
+    $('lastEdit').onclick = function () { openSheet(s.caravana, null); };
+    if (flashNext) {
+      flashNext = false;
+      box.classList.remove('flash'); void box.offsetWidth; box.classList.add('flash');
+    }
+  }
+  function renderStats() {
+    var start = new Date(); start.setHours(0, 0, 0, 0);
+    var today = 0;
+    for (var i = 0; i < lecturas.length; i++) if (lecturas[i].ts >= start.getTime()) today++;
+    $('sToday').textContent = today;
+    $('sTotal').textContent = lecturas.length;
+    $('sAnim').textContent = animals.size;
+  }
+  function matches(code, q) {
+    if (!q) return true;
+    var a = animals.get(code) || {};
+    return (code + ' ' + (a.sexo || '') + ' ' + (a.observaciones || '') + ' ' + (a.nacimiento || '') + ' ' + fmtDate(a.nacimiento) + ' ' + (a.tropa || '')).toLowerCase().indexOf(q) >= 0;
+  }
+  function renderList() {
+    var q = query.trim().toLowerCase(), rows = $('rows'), empty = $('empty'), html = '', total = 0;
+    if (listView === 'lect') {
+      var list = lecturas.filter(function (s) { return matches(s.caravana, q); });
+      total = list.length;
+      list.slice(0, shown).forEach(function (s) {
+        var a = animals.get(s.caravana);
+        var sub = a ? [a.sexo, a.nacimiento ? fmtDate(a.nacimiento) : '', a.tropa ? 'Tropa ' + a.tropa : ''].filter(Boolean).join(' · ') : '';
+        html += '<li><button type="button" class="row" data-code="' + esc(s.caravana) + '" data-id="' + esc(s.id) + '">' +
+          '<time>' + esc(fmtTime(s.ts)) + '</time><span class="nm">' + esc(s.caravana) + '</span>' +
+          '<span class="cd">' + esc(sub || 'Sin datos') + (s.pending ? ' · subiendo' : '') + '</span>' +
+          (a && a.observaciones ? '<span class="nt">' + esc(a.observaciones) + '</span>' : '') + '</button></li>';
+      });
+    } else {
+      var arr = Array.from(animals.values()).filter(function (a) { return matches(a.caravana, q); })
+        .sort(function (x, y) { return x.caravana < y.caravana ? -1 : 1; });
+      total = arr.length;
+      arr.slice(0, shown).forEach(function (a) {
+        var ed = edad(a.nacimiento);
+        var sub = [a.sexo, a.nacimiento ? fmtDate(a.nacimiento) + (ed ? ' (' + ed + ')' : '') : '', a.tropa ? 'Tropa ' + a.tropa : ''].filter(Boolean).join(' · ');
+        html += '<li><button type="button" class="row" data-code="' + esc(a.caravana) + '" data-id="">' +
+          '<span class="rt">' + countFor(a.caravana) + ' lect.</span><span class="nm">' + esc(a.caravana) + '</span>' +
+          '<span class="cd">' + esc(sub || 'Sin datos') + '</span>' +
+          (a.observaciones ? '<span class="nt">' + esc(a.observaciones) + '</span>' : '') + '</button></li>';
+      });
+    }
+    if (!total) {
+      rows.hidden = true; empty.hidden = false;
+      empty.innerHTML = q ? '<b>Sin resultados</b>Nada coincide con la búsqueda.'
+        : listView === 'lect'
+          ? '<b>Todavía no hay lecturas</b>Cuando el lector envíe una caravana aparece acá. Para probar sin lector, escribila en el campo y apretá Enter.'
+          : '<b>Todavía no hay animales</b>Al leer una caravana nueva podés cargar nacimiento, sexo y observaciones.';
+      $('more').hidden = true;
+      return;
+    }
+    rows.hidden = false; empty.hidden = true; rows.innerHTML = html;
+    $('more').hidden = total <= shown;
+  }
+  function setListView(v) {
+    listView = v; shown = 60;
+    $('vLect').setAttribute('aria-pressed', v === 'lect');
+    $('vAnim').setAttribute('aria-pressed', v === 'anim');
+    renderList();
+  }
+  $('vLect').onclick = function () { setListView('lect'); };
+  $('vAnim').onclick = function () { setListView('anim'); };
+  $('q').addEventListener('input', function (e) { query = e.target.value; shown = 60; renderList(); });
+  $('more').onclick = function () { shown += 60; renderList(); };
+  $('rows').addEventListener('click', function (e) {
+    var b = e.target.closest('.row');
+    if (b) openSheet(b.getAttribute('data-code'), b.getAttribute('data-id') || null);
+  });
+  try { var sv = localStorage.getItem('askNew'); if (sv === '0') $('askNew').checked = false; } catch (e) {}
+  $('askNew').addEventListener('change', function () {
+    try { localStorage.setItem('askNew', $('askNew').checked ? '1' : '0'); } catch (e) {}
+    focusScan();
+  });
+
+  /* ---------- crear tropa ---------- */
+  function handleTropaScan(code) {
+    var now = Date.now();
+    if (code === lastCode && now - lastAt < 1200) { lastAt = now; return; }
+    lastCode = code; lastAt = now;
+    var a = animals.get(code);
+    if (a && a.tropa) { beepErr(); say('La caravana ' + code + ' ya está en la tropa "' + a.tropa + '".'); return; }
+    if (a && a.baja) { beepErr(); say('La caravana ' + code + ' está dada de baja (' + a.baja.toLowerCase() + ').'); return; }
+    if (draft.codes.indexOf(code) >= 0) { beepErr(); say('La caravana ' + code + ' ya está en la lista.'); return; }
+    beep();
+    draft.codes.unshift(code);
+    saveDraft();
+    say('');
+    renderTropa();
+  }
+  function renderTropa() {
+    if (document.activeElement !== $('tName')) $('tName').value = draft.name;
+    $('tCount').textContent = draft.codes.length;
+    $('tSummary').innerHTML = draft.codes.length ? sumHtml(summarize(draft.codes)) : '';
+    $('tPdf').hidden = !downloads;
+    $('tPdf').disabled = !draft.codes.length;
+    var ul = $('tList'), html = '';
+    draft.codes.forEach(function (code) {
+      var a = animals.get(code);
+      var sub = a ? [a.sexo, a.nacimiento ? edad(a.nacimiento) : ''].filter(Boolean).join(' · ') : 'Caravana sin datos cargados';
+      html += '<li><div class="row split"><div class="info"><span class="nm" style="font-family:var(--font-mono);font-weight:500;overflow-wrap:anywhere">' + esc(code) + '</span>' +
+        '<span class="cd">' + esc(sub || 'Sin datos') + '</span></div>' +
+        '<button type="button" class="btn small danger" data-q="' + esc(code) + '">Quitar</button></div></li>';
+    });
+    ul.innerHTML = html;
+    ul.hidden = !draft.codes.length;
+    $('tEmpty').hidden = draft.codes.length > 0;
+    $('tConfirm').disabled = !draft.codes.length;
+    $('tClear').disabled = !draft.codes.length;
+
+    var tm = Array.from(tropasMap().values()).sort(function (x, y) { return (y.fecha || '') < (x.fecha || '') ? -1 : 1; });
+    var wrap = $('tropas'), h = '';
+    var openNames = {};
+    Array.from(wrap.querySelectorAll('details[open]')).forEach(function (d) { openNames[d.getAttribute('data-name')] = true; });
+    tm.forEach(function (t) {
+      h += '<details class="tropa" data-name="' + esc(t.name) + '"' + (openNames[t.name] ? ' open' : '') + '><summary>' + esc(t.name) +
+        '<span>' + t.codes.length + (t.codes.length === 1 ? ' animal' : ' animales') + (t.fecha ? ' · ' + esc(fmtDate(t.fecha)) : '') + '</span></summary><div class="inner">';
+      h += sumHtml(summarize(t.codes)) + '<ul class="rows" style="margin:0">';
+      t.codes.sort().forEach(function (code) {
+        var a = animals.get(code) || {};
+        var sub = [a.sexo, a.nacimiento ? edad(a.nacimiento) : ''].filter(Boolean).join(' · ');
+        h += '<li><div class="row split"><div class="info"><span class="nm" style="font-family:var(--font-mono);font-weight:500;overflow-wrap:anywhere">' + esc(code) + '</span><span class="cd">' + esc(sub || 'Sin datos') + '</span></div>' +
+          '<button type="button" class="btn small" data-back="' + esc(code) + '">Quitar</button></div></li>';
+      });
+      h += '</ul><div class="btnrow"><button type="button" class="btn small" data-add="' + esc(t.name) + '">Agregar caravanas</button>' +
+        (downloads ? '<button type="button" class="btn small primary" data-pdf="' + esc(t.name) + '">Descargar PDF</button>' : '') +
+        '<button type="button" class="btn danger small" data-backall="' + esc(t.name) + '">Devolver toda la tropa al stock</button></div></div></details>';
+    });
+    wrap.innerHTML = h;
+    $('tropasEmpty').hidden = tm.length > 0;
+  }
+  $('tName').addEventListener('input', function () { draft.name = $('tName').value; saveDraft(); });
+  $('tList').addEventListener('click', function (e) {
+    var b = e.target.closest('[data-q]');
+    if (!b) return;
+    var code = b.getAttribute('data-q');
+    draft.codes = draft.codes.filter(function (c) { return c !== code; });
+    saveDraft(); renderTropa(); focusScan();
+  });
+  $('tPdf').onclick = function () { tropaPdf($('tName').value.trim() || 'Sin nombre', todayStr(), draft.codes.slice(), true); };
+  $('tClear').onclick = function () { draft.codes = []; saveDraft(); renderTropa(); say('Lista vaciada.'); focusScan(); };
+  $('tConfirm').onclick = function () {
+    var name = $('tName').value.trim();
+    if (!name) { say('Ponele un nombre a la tropa.'); $('tName').focus(); return; }
+    if (!draft.codes.length) { say('La lista está vacía.'); return; }
+    var f = todayStr(), n = draft.codes.length, existed = tropasMap().has(name);
+    draft.codes.slice().reverse().forEach(function (code) {
+      commit({ t: 'A', rec: mkRec(code, { tropa: name, fechaTropa: f }) }, true);
+    });
+    draft = { name: '', codes: [] };
+    saveDraft();
+    rebuild(); scheduleFlush();
+    say(existed
+      ? 'Se sumaron ' + n + (n === 1 ? ' animal' : ' animales') + ' a la tropa "' + name + '".'
+      : n + (n === 1 ? ' animal pasó' : ' animales pasaron') + ' a la tropa "' + name + '" y salieron del stock.');
+    focusScan();
+  };
+  function returnToStock(codes) {
+    codes.forEach(function (code) { commit({ t: 'A', rec: mkRec(code, { tropa: '', fechaTropa: '' }) }, true); });
+    rebuild(); scheduleFlush();
+    say(codes.length + (codes.length === 1 ? ' animal volvió' : ' animales volvieron') + ' al stock.');
+  }
+  $('tropas').addEventListener('click', function (e) {
+    var ad = e.target.closest('[data-add]');
+    if (ad) { addToTropa(ad.getAttribute('data-add')); return; }
+    var pf = e.target.closest('[data-pdf]');
+    if (pf) { var t0 = tropasMap().get(pf.getAttribute('data-pdf')); if (t0) tropaPdf(t0.name, t0.fecha, t0.codes.slice(), false); return; }
+    var b = e.target.closest('[data-back]');
+    if (b) { returnToStock([b.getAttribute('data-back')]); return; }
+    var all = e.target.closest('[data-backall]');
+    if (all) {
+      var name = all.getAttribute('data-backall');
+      var t = tropasMap().get(name);
+      if (t) returnToStock(t.codes.slice());
+    }
+  });
+
+  function summarize(codes) {
+    var s = { total: codes.length, m: 0, h: 0, sx: 0, b: { b0: 0, b1: 0, b2: 0, b3: 0, bx: 0 } };
+    codes.forEach(function (c) {
+      var a = animals.get(c) || {};
+      if (a.sexo === 'Macho') s.m++; else if (a.sexo === 'Hembra') s.h++; else s.sx++;
+      s.b[bucketOf(a)]++;
+    });
+    return s;
+  }
+  function sumHtml(s) {
+    var h = '<div class="sumgrid"><div><b>' + s.total + '</b><span>Total</span></div><div><b>' + s.m + '</b><span>Machos</span></div><div><b>' + s.h + '</b><span>Hembras</span></div>' +
+      (s.sx ? '<div><b>' + s.sx + '</b><span>Sin sexo</span></div>' : '') + '</div>';
+    var ages = BUCKETS.filter(function (b) { return s.b[b.id]; }).map(function (b) { return b.label + ': ' + s.b[b.id]; }).join(' · ');
+    if (ages) h += '<p class="hint">' + esc(ages) + '</p>';
+    return h;
+  }
+  function addToTropa(name) {
+    draft.name = name; saveDraft();
+    $('tName').value = name;
+    renderTropa();
+    try { window.scrollTo(0, 0); } catch (e) {}
+    say('Pasá los tags (o escribilos) para sumarlos a la tropa "' + name + '" y tocá Confirmar tropa.');
+    focusScan();
+  }
+  async function tropaPdf(name, fecha, codes, isDraft) {
+    if (!downloads) { say('Esta vista no puede guardar archivos.'); return; }
+    if (!codes.length) { say('La tropa no tiene animales.'); return; }
+    if (!window.jspdf || !window.jspdf.jsPDF) { say('No se pudo cargar el generador de PDF. Revisá la conexión y recargá la página.'); return; }
+    try {
+      var doc = new window.jspdf.jsPDF({ unit: 'mm', format: 'a4' });
+      var M = 15, RIGHT = 195, y = M;
+      var sum = summarize(codes);
+      doc.setFont('helvetica', 'bold'); doc.setFontSize(18);
+      doc.text('Tropa: ' + name + (isDraft ? ' (borrador)' : ''), M, y + 6);
+      y += 14;
+      doc.setFont('helvetica', 'normal'); doc.setFontSize(10);
+      doc.text('Fecha: ' + fmtDate(fecha || todayStr()) + '     Total: ' + sum.total + (sum.total === 1 ? ' animal' : ' animales'), M, y);
+      y += 6;
+      doc.text('Machos: ' + sum.m + '     Hembras: ' + sum.h + (sum.sx ? '     Sin sexo: ' + sum.sx : ''), M, y);
+      y += 6;
+      var ageTxt = BUCKETS.filter(function (b) { return sum.b[b.id]; }).map(function (b) { return b.label + ': ' + sum.b[b.id]; }).join('     ');
+      if (ageTxt) doc.splitTextToSize(ageTxt, RIGHT - M).forEach(function (ln) { doc.text(ln, M, y); y += 5; });
+      y += 5;
+      var cols = [['N°', 15], ['Caravana', 25], ['Sexo', 75], ['Nacimiento', 95], ['Edad', 122], ['Observaciones', 155]];
+      function header() {
+        doc.setFillColor(230, 230, 230); doc.rect(M, y - 4.5, RIGHT - M, 7, 'F');
+        doc.setFont('helvetica', 'bold'); doc.setFontSize(9);
+        cols.forEach(function (c) { doc.text(c[0], c[1], y); });
+        doc.setFont('helvetica', 'normal');
+        y += 7;
+      }
+      header();
+      var sorted = codes.slice().sort(function (a, b) { return a.localeCompare(b, undefined, { numeric: true }); });
+      sorted.forEach(function (code, i) {
+        var a = animals.get(code) || {};
+        var obs = doc.splitTextToSize(a.observaciones || '', 38).slice(0, 3);
+        var rowH = Math.max(6, obs.length * 4 + 2);
+        if (y + rowH > 280) { doc.addPage(); y = M + 4; header(); }
+        doc.setFontSize(9);
+        doc.text(String(i + 1), cols[0][1], y);
+        doc.text(String(code), cols[1][1], y);
+        doc.text(a.sexo || '-', cols[2][1], y);
+        doc.text(a.nacimiento ? fmtDate(a.nacimiento) : '-', cols[3][1], y);
+        doc.text(edad(a.nacimiento) || '-', cols[4][1], y);
+        obs.forEach(function (ln, k) { doc.text(ln, cols[5][1], y + k * 4); });
+        doc.setDrawColor(200);
+        doc.line(M, y + rowH - 3.5, RIGHT, y + rowH - 3.5);
+        y += rowH;
+      });
+      var pages = doc.getNumberOfPages();
+      for (var p = 1; p <= pages; p++) {
+        doc.setPage(p); doc.setFont('helvetica', 'normal'); doc.setFontSize(8);
+        doc.text('Página ' + p + ' de ' + pages, 105, 290, { align: 'center' });
+      }
+      var safe = String(name).replace(/[^A-Za-z0-9_\-]+/g, '_').replace(/^_+|_+$/g, '') || 'tropa';
+      var r = await downloads.save({ filename: 'tropa-' + safe + '-' + todayStr() + '.pdf', data: doc.output('arraybuffer') });
+      say(r && r.status === 'saved' ? 'PDF guardado. Abrilo y mandalo a imprimir.' : 'PDF enviado.');
+    } catch (e) {
+      say(e && e.code === 'declined' ? 'Descarga cancelada.' : 'No se pudo crear el PDF.');
+    }
+  }
+
+  /* ---------- stock ---------- */
+  function renderStock() {
+    var stock = stockList();
+    // resumen por edad
+    var rowsT = BUCKETS.map(function (b) { return { b: b, tot: 0, m: 0, h: 0 }; });
+    var all = { tot: 0, m: 0, h: 0 };
+    stock.forEach(function (a) {
+      var id = bucketOf(a), r = rowsT.find(function (x) { return x.b.id === id; });
+      [r, all].forEach(function (x) {
+        x.tot++;
+        if (a.sexo === 'Macho') x.m++;
+        if (a.sexo === 'Hembra') x.h++;
+      });
+    });
+    var th = '<tr><th>Edad</th><th>Total</th><th>Machos</th><th>Hembras</th></tr>';
+    rowsT.forEach(function (r) {
+      if (r.b.id === 'bx' && !r.tot) return;
+      th += '<tr><td>' + esc(r.b.label) + '</td><td>' + r.tot + '</td><td>' + r.m + '</td><td>' + r.h + '</td></tr>';
+    });
+    th += '<tr class="tot"><td>Total de caravanas en stock</td><td>' + all.tot + '</td><td>' + all.m + '</td><td>' + all.h + '</td></tr>';
+    $('stockTbl').innerHTML = th;
+
+    // filtros
+    function chips(el, group, opts, cur) {
+      el.innerHTML = opts.map(function (o) {
+        return '<button type="button" class="cbtn" data-g="' + group + '" data-v="' + o[0] + '" aria-pressed="' + (cur === o[0]) + '">' + esc(o[1]) + '</button>';
+      }).join('');
+    }
+    var ageOpts = [['all', 'Todas']].concat(BUCKETS.filter(function (b) { return b.id !== 'bx' || all.tot && rowsT[4].tot; }).map(function (b) { return [b.id, b.label]; }));
+    chips($('fAge'), 'age', ageOpts, stockF.age);
+    chips($('fSex'), 'sexo', [['all', 'Todos'], ['Macho', 'Machos'], ['Hembra', 'Hembras']], stockF.sexo);
+
+    // resultado
+    var res = stock.filter(function (a) {
+      if (stockF.age !== 'all' && bucketOf(a) !== stockF.age) return false;
+      if (stockF.sexo !== 'all' && a.sexo !== stockF.sexo) return false;
+      return true;
+    }).sort(function (x, y) { return x.caravana < y.caravana ? -1 : 1; });
+    var rm = 0, rh = 0;
+    res.forEach(function (a) { if (a.sexo === 'Macho') rm++; if (a.sexo === 'Hembra') rh++; });
+    $('stockResult').innerHTML = '<b>' + res.length + '</b> ' + (res.length === 1 ? 'animal' : 'animales') +
+      (res.length ? ' · ' + rm + ' machos · ' + rh + ' hembras' : '');
+    var html = '';
+    res.slice(0, shownS).forEach(function (a) {
+      var ed = edad(a.nacimiento);
+      var sub = [a.sexo, ed, a.lote ? 'Lote ' + a.lote : ''].filter(Boolean).join(' · ');
+      html += '<li><button type="button" class="row" data-code="' + esc(a.caravana) + '" data-id="">' +
+        '<span class="rt">' + (a.nacimiento ? esc(fmtDate(a.nacimiento)) : '--') + '</span><span class="nm">' + esc(a.caravana) + '</span>' +
+        '<span class="cd">' + esc(sub || 'Sin datos') + '</span></button></li>';
+    });
+    $('sRows').innerHTML = html;
+    $('sRows').hidden = !res.length;
+    $('sEmpty').hidden = res.length > 0;
+    $('sMore').hidden = res.length <= shownS;
+  }
+  $('stockFilters').addEventListener('click', function (e) {
+    var b = e.target.closest('.cbtn');
+    if (!b) return;
+    stockF[b.getAttribute('data-g')] = b.getAttribute('data-v');
+    shownS = 80;
+    renderStock();
+  });
+  $('sMore').onclick = function () { shownS += 80; renderStock(); };
+  $('sRows').addEventListener('click', function (e) {
+    var b = e.target.closest('.row');
+    if (b) openSheet(b.getAttribute('data-code'), null);
+  });
+
+  /* ---------- editor ---------- */
+  function openSheet(code, lecturaId) {
+    editing = { code: code, lecturaId: lecturaId };
+    var a = animals.get(code) || {};
+    $('sheetCode').textContent = code;
+    $('fNac').value = a.nacimiento || '';
+    $('fSexo').value = a.sexo || '';
+    $('fObs').value = a.observaciones || '';
+    var cur = a.lote || '';
+    var lo = activeLotes().map(function (l) { return l.name; });
+    if (cur && lo.indexOf(cur) < 0) lo.push(cur);
+    $('fLote').innerHTML = '<option value="">Sin lote</option>' + lo.map(function (n) { return '<option value="' + esc(n) + '">' + esc(n) + '</option>'; }).join('');
+    $('fLote').value = cur;
+    $('sheetBaja').hidden = !a.baja;
+    $('sheetBajaTxt').textContent = a.baja ? 'Dado de baja: ' + a.baja.toLowerCase() + (a.fechaBaja ? ' el ' + fmtDate(a.fechaBaja) : '') : '';
+    $('sheetTropa').hidden = !a.tropa;
+    $('sheetTropaTxt').textContent = a.tropa ? 'En la tropa "' + a.tropa + '"' + (a.fechaTropa ? ' desde el ' + fmtDate(a.fechaTropa) : '') : '';
+    $('sheetDelL').hidden = !lecturaId;
+    $('sheetDelA').hidden = !animals.has(code);
+    $('backdrop').hidden = false; $('sheet').hidden = false;
+    setTimeout(function () { $('fNac').focus(); }, 30);
+  }
+  function closeSheet() {
+    editing = null;
+    $('backdrop').hidden = true; $('sheet').hidden = true;
+    focusScan();
+  }
+  $('sheetSave').onclick = function () {
+    if (!editing) return;
+    commit({ t: 'A', rec: mkRec(editing.code, { nacimiento: $('fNac').value, sexo: $('fSexo').value, observaciones: $('fObs').value.trim(), lote: $('fLote').value }) });
+    say('Datos guardados.');
+    closeSheet();
+  };
+  $('sheetCancel').onclick = closeSheet;
+  $('sheetRepo').onclick = function () {
+    if (!editing) return;
+    var code = editing.code;
+    closeSheet();
+    commit({ t: 'A', rec: mkRec(code, { baja: '', fechaBaja: '' }) });
+    say('El animal volvió al stock.');
+  };
+  $('backdrop').onclick = closeSheet;
+  $('sheetBack').onclick = function () {
+    if (!editing) return;
+    var code = editing.code;
+    closeSheet();
+    returnToStock([code]);
+  };
+  $('sheetDelL').onclick = async function () {
+    if (!editing || !editing.lecturaId) return;
+    var item = lecturas.find(function (l) { return l.id === editing.lecturaId; });
+    closeSheet();
+    if (!item) return;
+    try { await removeLectura(item); say('Lectura borrada.'); } catch (e) { say(errText(e)); }
+  };
+  $('sheetDelA').onclick = async function () {
+    if (!editing) return;
+    var code = editing.code;
+    closeSheet();
+    try { await removeAnimal(code); say('Datos del animal borrados.'); } catch (e) { say(errText(e)); }
+  };
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && editing) closeSheet(); });
+
+  /* ---------- campos del lector ---------- */
+  function setPill(on) {
+    $('pill').classList.toggle('on', on);
+    $('pilltxt').textContent = on ? 'Lector listo' : 'Lector en pausa · tocá para activar';
+  }
+  function wireScan(el, handler) {
+    el.addEventListener('focus', function () { setPill(true); });
+    el.addEventListener('blur', function () {
+      setPill(false);
+      setTimeout(function () {
+        if (!editing && hasScanner() && (document.activeElement === document.body || !document.activeElement)) focusScan();
+      }, 250);
+    });
+    el.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter' || e.key === 'Tab') {
+        e.preventDefault();
+        var v = el.value.trim(); el.value = '';
+        if (v) handler(v);
+      }
+    });
+    el.addEventListener('input', function () {
+      if (/[\r\n]/.test(el.value)) {
+        var v = el.value.replace(/[\r\n]+/g, '').trim(); el.value = '';
+        if (v) handler(v);
+      }
+    });
+  }
+  wireScan($('scan'), handleScan);
+  wireScan($('scanT'), handleTropaScan);
+  // El lector no necesita teclado en pantalla. "Escribir a mano" lo muestra para cargar una caravana con los dedos.
+  function wireManual(inputId, kbId, addId, handler) {
+    var el = $(inputId), kb = $(kbId), add = $(addId);
+    kb.onclick = function () {
+      var show = el.getAttribute('inputmode') === 'none';
+      el.setAttribute('inputmode', show ? 'text' : 'none');
+      kb.setAttribute('aria-pressed', show ? 'true' : 'false');
+      kb.textContent = show ? 'Ocultar teclado' : 'Escribir a mano';
+      el.blur();
+      setTimeout(function () { el.focus(); }, 60);
+    };
+    add.onclick = function () {
+      var v = el.value.trim();
+      el.value = '';
+      if (v) handler(v);
+      try { el.focus({ preventScroll: true }); } catch (e) { el.focus(); }
+    };
+  }
+  wireManual('scan', 'kbN', 'addN', handleScan);
+  wireManual('scanT', 'kbT', 'addT', handleTropaScan);
+  $('pill').onclick = focusScan;
+
+  /* ---------- exportar ---------- */
+  function csvCell(v) {
+    v = String(v == null ? '' : v);
+    return /[";\r\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v;
+  }
+  function csvAnimales() {
+    var lines = ['caravana;nacimiento;sexo;observaciones;tropa;fecha_tropa;lote;baja;fecha_baja;lecturas'];
+    Array.from(animals.values()).sort(function (x, y) { return x.caravana < y.caravana ? -1 : 1; }).forEach(function (a) {
+      lines.push([a.caravana, a.nacimiento || '', a.sexo || '', a.observaciones || '', a.tropa || '', a.fechaTropa || '', a.lote || '', a.baja || '', a.fechaBaja || '', countFor(a.caravana)].map(csvCell).join(';'));
+    });
+    return lines.join('\r\n');
+  }
+  function csvLecturas() {
+    var lines = ['fecha_hora;caravana;nacimiento;sexo;observaciones'];
+    lecturas.slice().reverse().forEach(function (s) {
+      var a = animals.get(s.caravana) || {};
+      lines.push([fmtIso(s.ts), s.caravana, a.nacimiento || '', a.sexo || '', a.observaciones || ''].map(csvCell).join(';'));
+    });
+    return lines.join('\r\n');
+  }
+  async function exportar(nombre, csv, hayDatos) {
+    if (!downloads) return;
+    if (!hayDatos) { say('No hay datos para exportar.'); return; }
+    try {
+      var r = await downloads.save({ filename: nombre + '-' + todayStr() + '.csv', data: '﻿' + csv });
+      say(r && r.status === 'saved' ? 'CSV guardado.' : 'CSV enviado.');
+    } catch (e) {
+      say(e && e.code === 'declined' ? 'Exportación cancelada.' : 'No se pudo exportar. Probá con Copiar animales.');
+    }
+  }
+  $('btnExpA').onclick = function () { exportar('animales', csvAnimales(), animals.size > 0); };
+  $('btnExpL').onclick = function () { exportar('lecturas', csvLecturas(), lecturas.length > 0); };
+  $('btnCopy').onclick = function () {
+    if (!animals.size) { say('No hay animales para copiar.'); return; }
+    var csv = csvAnimales(), box = $('csvbox');
+    function fallback() {
+      box.hidden = false; box.value = csv; box.focus(); box.select();
+      say('Seleccioné el texto. Copialo con el menú del celular.');
+    }
+    try { navigator.clipboard.writeText(csv).then(function () { box.hidden = true; say('CSV copiado.'); }, fallback); }
+    catch (e) { fallback(); }
+  };
+  $('btnClear').onclick = function () {
+    if (!lecturas.length) { say('No hay lecturas para borrar.'); return; }
+    $('confirmTxt').textContent = '¿Borrar las ' + lecturas.length + ' lecturas de la planilla? Los datos de los animales se conservan.';
+    $('confirm').hidden = false;
+  };
+  $('confirmNo').onclick = function () { $('confirm').hidden = true; };
+  $('confirmYes').onclick = async function () {
+    $('confirm').hidden = true;
+    try { await clearLecturas(); say('Lecturas borradas.'); } catch (e) { say(errText(e)); }
+  };
+
+  /* ---------- importar planilla (Excel, ODS o CSV) ---------- */
+  var pendingImport = null;
+  function norm(s) { return String(s == null ? '' : s).toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').trim(); }
+  function toIso(v) {
+    if (v instanceof Date) return v.getFullYear() + '-' + pad(v.getMonth() + 1) + '-' + pad(v.getDate());
+    if (typeof v === 'number') {
+      if (v < 20000 || v > 80000) return '';
+      var d = new Date(Math.round((v - 25569) * 86400000));
+      return d.getUTCFullYear() + '-' + pad(d.getUTCMonth() + 1) + '-' + pad(d.getUTCDate());
+    }
+    var s = String(v == null ? '' : v).trim(), m;
+    if ((m = s.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})/))) {
+      var y = +m[3]; if (y < 100) y += y < 50 ? 2000 : 1900;
+      return y + '-' + pad(+m[2]) + '-' + pad(+m[1]);
+    }
+    if ((m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/))) return m[1] + '-' + pad(+m[2]) + '-' + pad(+m[3]);
+    return '';
+  }
+  function toSexo(v) {
+    var s = norm(v);
+    if (!s) return '';
+    if (s[0] === 'm') return 'Macho';
+    if (s[0] === 'h' || s[0] === 'f') return 'Hembra';
+    return '';
+  }
+  function parseRows(rows) {
+    var hi = -1, col = { c: 0, n: 1, s: 2, o: 3 };
+    for (var r = 0; r < Math.min(rows.length, 10) && hi < 0; r++) {
+      var cells = (rows[r] || []).map(norm);
+      var ci = cells.findIndex(function (c) { return /^(caravana|tag|rfid|chip|id|numero|nro|n°)/.test(c); });
+      if (ci >= 0) {
+        hi = r;
+        col = {
+          c: ci,
+          n: cells.findIndex(function (c) { return /nacim|fecha/.test(c); }),
+          s: cells.findIndex(function (c) { return /^sexo/.test(c); }),
+          o: cells.findIndex(function (c) { return /observ|nota|coment/.test(c); })
+        };
+      }
+    }
+    var out = new Map();
+    for (var i = hi + 1; i < rows.length; i++) {
+      var row = rows[i] || [];
+      var code = String(row[col.c] == null ? '' : row[col.c]).trim();
+      if (!code) continue;
+      out.set(code, {
+        caravana: code,
+        nacimiento: col.n >= 0 ? toIso(row[col.n]) : '',
+        sexo: col.s >= 0 ? toSexo(row[col.s]) : '',
+        observaciones: col.o >= 0 ? String(row[col.o] == null ? '' : row[col.o]).trim() : ''
+      });
+    }
+    return Array.from(out.values());
+  }
+  $('btnImport').onclick = function () { $('fileIn').value = ''; $('fileIn').click(); };
+  $('fileIn').addEventListener('change', async function () {
+    var f = $('fileIn').files && $('fileIn').files[0];
+    if (!f) return;
+    if (!window.XLSX) { say('No se pudo cargar el lector de planillas. Revisá la conexión y recargá la página.'); return; }
+    try {
+      var wb;
+      if (/\.csv$/i.test(f.name)) wb = XLSX.read(await f.text(), { type: 'string' });
+      else wb = XLSX.read(await f.arrayBuffer(), { type: 'array' });
+      var ws = wb.Sheets[wb.SheetNames[0]];
+      var rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: '' });
+      var list = parseRows(rows);
+      if (!list.length) { say('No encontré caravanas en la planilla. La primera hoja debe tener una columna "caravana".'); return; }
+      var nuevos = list.filter(function (a) { return !animals.has(a.caravana); }).length;
+      pendingImport = list;
+      $('impTxt').textContent = 'El archivo "' + f.name + '" tiene ' + list.length + ' caravanas: ' + nuevos + ' nuevas y ' + (list.length - nuevos) + ' que ya están cargadas. En las que ya existen solo se completan los datos que vengan en el archivo.';
+      $('imp').hidden = false;
+    } catch (e) {
+      say('No se pudo leer el archivo. Probá guardarlo como .xlsx o .csv.');
+    }
+  });
+  $('impNo').onclick = function () { pendingImport = null; $('imp').hidden = true; };
+  $('impYes').onclick = async function () {
+    var list = pendingImport;
+    if (!list) return;
+    $('impYes').disabled = true; $('impNo').disabled = true;
+    list.forEach(function (n) {
+      var patch = {};
+      if (n.nacimiento) patch.nacimiento = n.nacimiento;
+      if (n.sexo) patch.sexo = n.sexo;
+      if (n.observaciones) patch.observaciones = n.observaciones;
+      commit({ t: 'A', rec: mkRec(n.caravana, patch) }, true);
+    });
+    rebuild();
+    say('Subiendo ' + list.length + ' caravanas a la planilla...');
+    say('Las ' + list.length + ' caravanas quedaron en el celular. Tocá Sincronizar para subirlas.');
+    pendingImport = null; $('imp').hidden = true;
+    $('impYes').disabled = false; $('impNo').disabled = false;
+  };
+
+  /* ---------- campo, lotes y registros ---------- */
+  var regTipo = 'nac', regLote = '', infYear = 'all', seq = 0, cOpen = false, cState = null, pendingDel = null, delTimer = null;
+  var draftC = { lote: '', sexo: 'Macho', nac: '', vac: true, vacuna: 'Aftosa', codes: [] };
+  (function () { var d = lsGet('rt_car_draft'); if (d && Array.isArray(d.codes)) draftC = Object.assign(draftC, d); })();
+  function saveDraftC() { lsSet('rt_car_draft', draftC); }
+  function newId() { return Date.now() + '-' + (++seq) + Math.random().toString(36).slice(2, 5); }
+  function num(v) { var x = parseFloat(String(v == null ? '' : v).replace(',', '.')); return isFinite(x) ? x : 0; }
+  function iv(id) { var el = $(id); return el ? Math.max(0, parseInt(el.value, 10) || 0) : 0; }
+  function nf(x, d) { return Number(x || 0).toLocaleString('es-AR', { maximumFractionDigits: d == null ? 1 : d }); }
+  function pctTxt(a, b) { return b > 0 ? nf(a / b * 100, 1) + ' %' : '-'; }
+  function money(x) { return '$ ' + nf(x, 0); }
+  function sumBy(arr, f) { return arr.reduce(function (s, x) { return s + (f(x) || 0); }, 0); }
+  function aggBy(list, keyFn) {
+    var m = new Map();
+    list.forEach(function (e) { var k = keyFn(e), o = m.get(k); if (!o) { o = { k: k, items: [] }; m.set(k, o); } o.items.push(e); });
+    return Array.from(m.values()).sort(function (a, b) { return a.k < b.k ? -1 : a.k > b.k ? 1 : 0; });
+  }
+  function monthLabel(k) {
+    var M = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'], p = k.split('-');
+    return M[+p[1] - 1] + ' ' + p[0].slice(2);
+  }
+  function emptyCounts() { var o = {}; CATS_ALL.forEach(function (c) { o[c] = 0; }); return o; }
+  function loteTotal(o) { return o ? CATS_ALL.reduce(function (s, c) { return s + (o[c] || 0); }, 0) : 0; }
+  function loteHa(l) { return l.potreros.reduce(function (s, n) { var p = potreros[n - 1]; return s + (p ? p.ha || 0 : 0); }, 0); }
+  function activeLotes() {
+    return Array.from(lotes.values()).filter(function (l) { return l.estado !== 'Cerrado'; })
+      .sort(function (x, y) { return x.name.localeCompare(y.name, 'es', { numeric: true }); });
+  }
+  function computeStock() {
+    var m = new Map();
+    lotes.forEach(function (l, k) { m.set(k, emptyCounts()); });
+    function add(l, c, d) { var o = m.get(l); if (!o || isTag(c) || !(c in o)) return; o[c] += d; }
+    movs.forEach(function (e) {
+      var n = e.n || 0;
+      if (e.tipo === 'alta') add(e.lote, e.cat, n);
+      else if (e.tipo === 'nacimiento') add(e.lote, sexCat(e.g), n);
+      else if (e.tipo === 'caravaneo') add(e.lote, sexCat(e.g), -n);
+      else if (e.tipo === 'muerte' || e.tipo === 'venta') add(e.lote, e.cat, -n);
+      else if (e.tipo === 'traslado') { add(e.lote, e.cat, -n); add(e.f, e.cat, n); }
+    });
+    animals.forEach(function (a) {
+      if (a.tropa || a.baja || !a.lote) return;
+      var o = m.get(a.lote);
+      if (o) o[tagCat(a.sexo)]++;
+    });
+    stk = m;
+  }
+  function mkEv(tipo, lote, cat, n, f, g, h, obs, fecha) {
+    return { fecha: fecha || todayStr(), tipo: tipo, lote: lote || '', cat: cat || '', n: n || 0, f: f || '', g: g == null ? '' : String(g), h: h == null ? '' : String(h), obs: obs || '', id: newId() };
+  }
+  function evCommit(rec) { commit({ t: 'M', rec: rec }, true); }
+  function finishBatch() { rebuild(); scheduleFlush(); }
+  function moveTagged(src, dest, fecha) {
+    var codes = [];
+    animals.forEach(function (a) { if (a.lote === src && !a.tropa && !a.baja) codes.push(a.caravana); });
+    codes.forEach(function (c) { commit({ t: 'A', rec: mkRec(c, { lote: dest }) }, true); });
+    var nh = codes.filter(function (c) { return animals.get(c).sexo === 'Hembra'; }).length;
+    if (codes.length - nh) evCommit(mkEv('traslado', src, TAGCAT, codes.length - nh, dest, '', '', 'Traslado', fecha));
+    if (nh) evCommit(mkEv('traslado', src, TAGCAT2, nh, dest, '', '', 'Traslado', fecha));
+    return codes.length;
+  }
+  function taggedIn(l) { var n = 0; animals.forEach(function (a) { if (a.lote === l && !a.tropa && !a.baja) n++; }); return n; }
+
+  /* --- modal de campo --- */
+  function openC(html) {
+    $('csheetIn').innerHTML = html;
+    $('cback').hidden = false; $('csheet').hidden = false; cOpen = true;
+    try { $('csheet').scrollTop = 0; } catch (e) {}
+  }
+  function closeC() { $('cback').hidden = true; $('csheet').hidden = true; cOpen = false; cState = null; focusScan(); }
+  $('cback').onclick = closeC;
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && cOpen) closeC(); });
+  function fld(id, label, inner) { return '<div class="field"><label class="label" for="' + id + '">' + label + '</label>' + inner + '</div>'; }
+  function fInt(id, label, v) { return fld(id, label, '<input id="' + id + '" type="number" inputmode="numeric" min="0" step="1" value="' + (v == null ? '' : v) + '">'); }
+  function fNum(id, label, v) { return fld(id, label, '<input id="' + id + '" type="number" inputmode="decimal" min="0" step="any" value="' + (v == null ? '' : v) + '">'); }
+  function fSel(id, label, opts, cur) {
+    return fld(id, label, '<select id="' + id + '">' + opts.map(function (o) {
+      var v = Array.isArray(o) ? o[0] : o, t = Array.isArray(o) ? o[1] : o;
+      return '<option value="' + esc(v) + '"' + (v === cur ? ' selected' : '') + '>' + esc(t) + '</option>';
+    }).join('') + '</select>');
+  }
+  function fTxt(id, label, ph, v, list) {
+    return fld(id, label, '<input id="' + id + '" type="text" autocomplete="off" maxlength="80" placeholder="' + esc(ph || '') + '" value="' + esc(v || '') + '"' + (list ? ' list="' + list + '"' : '') + '>');
+  }
+  function fDate(id, label, v) { return fld(id, label, '<input id="' + id + '" type="date" value="' + esc(v == null ? todayStr() : v) + '">'); }
+
+  function potLabel(l) {
+    if (!l.potreros.length) return 'Sin potreros asignados';
+    return 'Potrero' + (l.potreros.length > 1 ? 's ' : ' ') + l.potreros.join(', ') + ' · ' + nf(loteHa(l), 2) + ' ha';
+  }
+  function renderCampo() {
+    $('campoLista').hidden = campoView !== 'lista'; $('mapaBox').hidden = campoView !== 'mapa';
+    Array.from($('campoVista').children).forEach(function (b) { b.setAttribute('aria-pressed', b.getAttribute('data-cv') === campoView); });
+    var act = activeLotes(), cab = 0, haTot = potreros.reduce(function (s, p) { return s + (p.ha || 0); }, 0), sinLote = 0;
+    act.forEach(function (l) { cab += loteTotal(stk.get(l.name)); });
+    animals.forEach(function (a) {
+      if (a.tropa || a.baja) return;
+      var l = lotes.get(a.lote);
+      if (!l || l.estado === 'Cerrado') sinLote++;
+    });
+    $('campoSum').innerHTML = '<div class="sumgrid" style="margin:0"><div><b>' + act.length + '</b><span>Lotes</span></div><div><b>' + nf(cab, 0) + '</b><span>Cabezas</span></div>' +
+      '<div><b>' + nf(haTot, 2) + '</b><span>Hectáreas</span></div><div><b>' + (haTot > 0 ? nf(cab / haTot, 2) : '-') + '</b><span>Cab./ha</span></div></div>' +
+      (sinLote ? '<p class="hint" style="margin-top:8px">' + sinLote + (sinLote === 1 ? ' ternero con caravana está' : ' terneros con caravana están') + ' sin lote. Asignalo desde su ficha.</p>' : '');
+    if (campoView === 'mapa') renderMapa();
+    var h = '';
+    act.forEach(function (l) {
+      var o = stk.get(l.name) || emptyCounts(), tot = loteTotal(o), ha = loteHa(l);
+      h += '<section class="panel lcard"><div class="lhead"><b>' + esc(l.name) + '</b><span class="hint">' + esc(potLabel(l)) + '</span></div>';
+      h += '<div class="sumgrid" style="margin:0"><div><b>' + tot + '</b><span>Total</span></div>';
+      CATS_ALL.forEach(function (c) { if (o[c]) h += '<div><b>' + o[c] + '</b><span>' + esc(c) + '</span></div>'; });
+      h += '</div>';
+      if (ha > 0 && tot) h += '<p class="hint">' + nf(tot / ha, 2) + ' cabezas por hectárea</p>';
+      if (l.obs) h += '<p class="note" style="margin:0;font-size:14px">' + esc(l.obs) + '</p>';
+      h += '<div class="btnrow"><button type="button" class="btn small" data-la="ajuste" data-l="' + esc(l.name) + '">Cargar cantidades</button>' +
+        '<button type="button" class="btn small" data-la="mover" data-l="' + esc(l.name) + '">Mover hacienda</button>' +
+        '<button type="button" class="btn small" data-la="fusion" data-l="' + esc(l.name) + '">Fusionar</button>' +
+        '<button type="button" class="btn small" data-la="edit" data-l="' + esc(l.name) + '">Editar</button></div></section>';
+    });
+    if (!act.length) h = '<div class="panel empty"><b>Todavía no hay lotes</b>Creá el primero con "Nuevo lote" y elegí qué potreros usa.</div>';
+    $('lotes').innerHTML = h;
+    var ae = document.activeElement;
+    if (!(ae && ae.getAttribute && ae.getAttribute('data-pot'))) {
+      var ph = '';
+      potreros.forEach(function (p) {
+        var who = act.filter(function (l) { return l.potreros.indexOf(p.n) >= 0; }).map(function (l) { return l.name; });
+        ph += '<div class="pot"><b>Potrero ' + p.n + '</b><input type="text" inputmode="decimal" data-pot="' + p.n + '" value="' + esc(String(p.ha).replace('.', ',')) + '" aria-label="Hectáreas del potrero ' + p.n + '"><span class="who">' + (who.length ? esc(who.join(' + ')) : 'Libre') + '</span></div>';
+      });
+      $('potList').innerHTML = ph;
+    }
+    $('potFoot').textContent = 'Suma de los potreros: ' + nf(haTot, 2) + ' ha' + (Math.abs(haTot - CAMPO_HA) > 0.01 ? ' (el campo tiene ' + CAMPO_HA + ' ha)' : ' (coincide con las ' + CAMPO_HA + ' ha del campo)') + '. Escribí las hectáreas y salí del casillero para guardar.';
+  }
+  $('potList').addEventListener('change', function (e) {
+    var el = e.target.closest('[data-pot]');
+    if (!el) return;
+    var n = +el.getAttribute('data-pot'), v = parseFloat(String(el.value).replace(',', '.'));
+    if (!isFinite(v) || v < 0) { say('Escribí un número de hectáreas válido.'); el.value = String(potreros[n - 1].ha).replace('.', ','); return; }
+    commit({ t: 'P', rec: { n: n, ha: v } });
+    say('Potrero ' + n + ': ' + nf(v) + ' ha.');
+  });
+  $('lNuevo').onclick = function () { openLoteForm(''); };
+  $('lotes').addEventListener('click', function (e) {
+    var b = e.target.closest('[data-la]');
+    if (!b) return;
+    var a = b.getAttribute('data-la'), n = b.getAttribute('data-l');
+    if (a === 'edit') openLoteForm(n); else if (a === 'ajuste') openAjuste(n); else if (a === 'mover') openMover(n, false); else if (a === 'fusion') openMover(n, true);
+  });
+
+  function openLoteForm(name, pre) {
+    var l = name ? lotes.get(name) : null, sel = l ? l.potreros.slice() : (pre || []).slice();
+    cState = { mode: 'lote', orig: name || '', sel: sel };
+    var h = '<h2>' + (l ? 'Editar lote' : 'Nuevo lote') + '</h2>';
+    h += fld('cName', 'Nombre', '<input id="cName" type="text" maxlength="40" autocomplete="off" value="' + esc(name || '') + '"' + (l ? ' readonly' : '') + ' placeholder="Por ejemplo: Vacas de cría">');
+    h += '<div class="fgroup"><span class="label">Potreros que usa (podés marcar varios)</span><div class="chips potchips" id="cPots">';
+    for (var n = 1; n <= NPOT; n++) h += '<button type="button" class="cbtn" data-p="' + n + '" aria-pressed="' + (sel.indexOf(n) >= 0) + '">' + n + '</button>';
+    h += '</div></div>' + fld('cObs', 'Observaciones', '<textarea id="cObs" maxlength="500">' + esc(l ? l.obs : '') + '</textarea>');
+    h += '<div class="acts"><button type="button" class="btn primary" id="cSave">Guardar</button><button type="button" class="btn" id="cCancel">Cancelar</button></div>';
+    openC(h);
+    if (!l) setTimeout(function () { var el = $('cName'); if (el) el.focus(); }, 30);
+  }
+  function openAjuste(name) {
+    var o = stk.get(name) || emptyCounts(), t = taggedIn(name);
+    cState = { mode: 'ajuste', lote: name };
+    var h = '<h2>Cantidades de ' + esc(name) + '</h2><p class="hint" style="margin:0">Escribí cuántos animales hay hoy en el lote. Se guarda la diferencia como ajuste.</p><div class="two">';
+    CATS.forEach(function (c, i) { h += fInt('cN' + i, esc(c), o[c] || 0); });
+    h += '</div>' + (t ? '<p class="hint" style="margin:0">Además hay ' + t + ' terneros con caravana (se cuentan solos).</p>' : '');
+    h += '<div class="acts"><button type="button" class="btn primary" id="cSave">Guardar</button><button type="button" class="btn" id="cCancel">Cancelar</button></div>';
+    openC(h);
+  }
+  function openMover(name, fusion) {
+    var o = stk.get(name) || emptyCounts(), t = taggedIn(name), others = activeLotes().filter(function (l) { return l.name !== name; });
+    cState = { mode: fusion ? 'fusion' : 'mover', lote: name };
+    var h = '<h2>' + (fusion ? 'Fusionar ' : 'Mover hacienda de ') + esc(name) + '</h2>';
+    if (fusion && !others.length) {
+      h += '<p class="hint">No hay otro lote para fusionar. Creá uno primero.</p><div class="acts"><button type="button" class="btn" id="cCancel">Cerrar</button></div>';
+      openC(h); return;
+    }
+    var opts = others.map(function (l) { return [l.name, l.name]; });
+    if (!fusion) opts.push(['__new', 'Nuevo lote...']);
+    h += fSel('cDest', fusion ? 'Se une al lote' : 'Pasa al lote', opts, opts[0][0]);
+    if (!fusion) {
+      h += '<div id="cNewBox"' + (others.length ? ' hidden' : '') + '>' + fTxt('cNew', 'Nombre del lote nuevo', 'Por ejemplo: Destete') + '</div>';
+      h += '<span class="label">Cuántos pasan</span><div class="two">';
+      CATS.forEach(function (c, i) { h += fInt('cN' + i, esc(c) + ' (hay ' + (o[c] || 0) + ')', ''); });
+      h += '</div>';
+      if (t) h += '<label class="opt"><input type="checkbox" id="cTag"> Pasar también los ' + t + ' terneros con caravana</label>';
+    } else {
+      var parts = CATS.filter(function (c) { return o[c]; }).map(function (c) { return o[c] + ' ' + c.toLowerCase(); });
+      if (t) parts.push(t + ' terneros con caravana');
+      h += '<p class="hint" style="margin:0">Pasan todos los animales (' + (parts.join(', ') || 'ninguno') + ') y los potreros del lote. "' + esc(name) + '" queda cerrado.</p>';
+    }
+    h += '<div class="acts"><button type="button" class="btn primary" id="cSave">' + (fusion ? 'Fusionar' : 'Mover') + '</button><button type="button" class="btn" id="cCancel">Cancelar</button></div>';
+    openC(h);
+  }
+  $('csheetIn').addEventListener('change', function (e) {
+    if (e.target.id === 'cDest' && $('cNewBox')) $('cNewBox').hidden = e.target.value !== '__new';
+  });
+  $('csheetIn').addEventListener('click', function (e) {
+    var ma = e.target.closest('[data-ma]');
+    if (ma) {
+      var a0 = ma.getAttribute('data-ma'), n0 = ma.getAttribute('data-l');
+      if (a0 === 'new') openLoteForm('', [+ma.getAttribute('data-n')]); else if (a0 === 'edit') openLoteForm(n0); else if (a0 === 'ajuste') openAjuste(n0); else if (a0 === 'mover') openMover(n0, false); else if (a0 === 'fusion') openMover(n0, true);
+      return;
+    }
+    var pb = e.target.closest('[data-p]');
+    if (pb && cState && cState.mode === 'lote') {
+      var n = +pb.getAttribute('data-p'), i = cState.sel.indexOf(n);
+      if (i >= 0) cState.sel.splice(i, 1); else cState.sel.push(n);
+      pb.setAttribute('aria-pressed', i < 0);
+      return;
+    }
+    if (e.target.id === 'cCancel') { closeC(); return; }
+    if (e.target.id !== 'cSave' || !cState) return;
+    var fecha = todayStr(), s = cState;
+    if (s.mode === 'lote') {
+      var name = $('cName').value.trim();
+      if (!name) { say('Ponele un nombre al lote.'); return; }
+      var ex = lotes.get(name);
+      if (!s.orig && ex && ex.estado !== 'Cerrado') { say('Ya hay un lote con ese nombre.'); return; }
+      commit({ t: 'T', rec: { name: name, potreros: s.sel.slice().sort(function (a, b) { return a - b; }), estado: 'Activo', obs: $('cObs').value.trim() } });
+      say(s.orig ? 'Lote guardado.' : 'Lote "' + name + '" creado.');
+      closeC();
+    } else if (s.mode === 'ajuste') {
+      var o = stk.get(s.lote) || emptyCounts(), k = 0;
+      CATS.forEach(function (c, i) {
+        var want = iv('cN' + i), cur = o[c] || 0;
+        if (want !== cur) { evCommit(mkEv('alta', s.lote, c, want - cur, '', '', '', 'Ajuste manual', fecha)); k++; }
+      });
+      if (!k) { say('No cambiaste ninguna cantidad.'); return; }
+      finishBatch(); say('Cantidades de "' + s.lote + '" actualizadas.'); closeC();
+    } else if (s.mode === 'mover') {
+      var o2 = stk.get(s.lote) || emptyCounts(), dest = $('cDest').value, moves = [], tag = !!($('cTag') && $('cTag').checked);
+      CATS.forEach(function (c, i) {
+        var n = iv('cN' + i);
+        if (n > (o2[c] || 0)) n = o2[c] || 0;
+        if (n > 0) moves.push([c, n]);
+      });
+      if (!moves.length && !tag) { say('Escribí cuántos animales pasan.'); return; }
+      if (dest === '__new') {
+        var nn = $('cNew').value.trim();
+        if (!nn) { say('Ponele un nombre al lote nuevo.'); return; }
+        var ex2 = lotes.get(nn);
+        if (ex2 && ex2.estado !== 'Cerrado') { say('Ya hay un lote con ese nombre.'); return; }
+        commit({ t: 'T', rec: { name: nn, potreros: [], estado: 'Activo', obs: 'Creado el ' + fmtDate(fecha) + ' con hacienda de ' + s.lote } }, true);
+        dest = nn;
+      }
+      moves.forEach(function (m) { evCommit(mkEv('traslado', s.lote, m[0], m[1], dest, '', '', 'Traslado', fecha)); });
+      var tg = tag ? moveTagged(s.lote, dest, fecha) : 0;
+      var tot = sumBy(moves, function (m) { return m[1]; }) + tg;
+      finishBatch(); say(tot + ' animales pasaron de "' + s.lote + '" a "' + dest + '".'); closeC();
+    } else if (s.mode === 'fusion') {
+      var o3 = stk.get(s.lote) || emptyCounts(), d2 = $('cDest').value, src = lotes.get(s.lote), dst = lotes.get(d2);
+      if (!src || !dst) return;
+      var tt = 0;
+      CATS.forEach(function (c) { if (o3[c] > 0) { evCommit(mkEv('traslado', s.lote, c, o3[c], d2, '', '', 'Fusión', fecha)); tt += o3[c]; } });
+      tt += moveTagged(s.lote, d2, fecha);
+      var un = dst.potreros.slice();
+      src.potreros.forEach(function (p) { if (un.indexOf(p) < 0) un.push(p); });
+      commit({ t: 'T', rec: { name: d2, potreros: un.sort(function (a, b) { return a - b; }), estado: 'Activo', obs: dst.obs } }, true);
+      commit({ t: 'T', rec: { name: s.lote, potreros: [], estado: 'Cerrado', obs: (src.obs ? src.obs + ' · ' : '') + 'Fusionado con ' + d2 + ' el ' + fmtDate(fecha) } }, true);
+      finishBatch(); say('"' + s.lote + '" se fusionó con "' + d2 + '" (' + tt + ' animales).'); closeC();
+    }
+  });
+
+  /* --- mapa del campo (plano trazado a mano sobre la imagen satelital) --- */
+  var campoView = lsGet('rt_campo_view') === 'mapa' ? 'mapa' : 'lista';
+  var PLANO = {
+    vb: '140 265 595 1435',
+    polys: {
+      1: [[340, 275], [520, 295], [513, 427], [345, 430]],
+      3: [[520, 295], [708, 290], [711, 425], [513, 427]],
+      2: [[345, 430], [513, 427], [522, 580], [528, 590], [347, 595]],
+      4: [[513, 427], [711, 425], [711, 558], [520, 566]],
+      5: [[520, 566], [711, 560], [714, 727], [510, 727]],
+      6: [[347, 595], [503, 592], [505, 672], [348, 672]],
+      7: [[348, 672], [498, 675], [500, 750], [349, 750]],
+      8: [[510, 727], [714, 727], [716, 825], [602, 808]],
+      10: [[510, 728], [602, 808], [609, 872], [585, 903], [530, 908], [534, 990], [565, 1055], [446, 1073], [441, 828], [502, 778]],
+      9: [[349, 750], [500, 750], [502, 777], [441, 828], [444, 1070], [385, 1135], [378, 1172], [352, 1178]],
+      11: [[602, 808], [716, 825], [721, 1220], [640, 1222], [636, 1163], [560, 1115], [520, 1066], [565, 1055], [534, 990], [530, 908], [585, 903], [609, 872]],
+      12: [[446, 1073], [520, 1066], [560, 1115], [636, 1163], [640, 1222], [355, 1226], [352, 1178], [378, 1172], [385, 1135], [444, 1070]],
+      13: [[153, 1224], [355, 1226], [450, 1315], [452, 1493], [158, 1458]],
+      14: [[158, 1458], [452, 1493], [453, 1688], [158, 1688]]
+    },
+    nudge: {}
+  };
+  var LOTE_COLORS = ['#2a78d6', '#eb6834', '#8a63d2', '#b8860b', '#d6457b', '#2a9d8f', '#6c7a89', '#a15c38'];
+  function polyInfo(pts) {
+    var a = 0, cx = 0, cy = 0, i, j, f;
+    for (i = 0; i < pts.length; i++) { j = (i + 1) % pts.length; f = pts[i][0] * pts[j][1] - pts[j][0] * pts[i][1]; a += f; cx += (pts[i][0] + pts[j][0]) * f; cy += (pts[i][1] + pts[j][1]) * f; }
+    a /= 2;
+    return { c: [cx / (6 * a), cy / (6 * a)], area: Math.abs(a) };
+  }
+  function renderMapa() {
+    var act = activeLotes(), color = new Map(), byPot = {};
+    act.forEach(function (l, i) { color.set(l.name, LOTE_COLORS[i % LOTE_COLORS.length]); l.potreros.forEach(function (n) { if (!byPot[n]) byPot[n] = l; }); });
+    function cabOf(l) { return loteTotal(stk.get(l.name)); }
+    var svg = '<svg viewBox="' + PLANO.vb + '" role="img" aria-label="Plano del campo con los potreros" style="width:100%;height:auto;display:block;max-height:78vh">';
+    Object.keys(PLANO.polys).forEach(function (k) {
+      var n = +k, pts = PLANO.polys[k], inf = polyInfo(pts), l = byPot[n], p = potreros[n - 1] || { ha: 0 };
+      var sc = Math.max(0.7, Math.min(1, inf.area / 22000)), nd = PLANO.nudge[n] || [0, 0];
+      var lines = [{ t: String(n), s: 42 * sc, b: 1 }];
+      if (inf.area > 9000 || !l) lines.push({ t: nf(p.ha, 2) + ' ha', s: 22 * sc });
+      if (l) {
+        if (inf.area > 14000) lines.push({ t: l.name.length > 13 ? l.name.slice(0, 12) + '…' : l.name, s: 22 * sc, b: 1 });
+        lines.push({ t: cabOf(l) + ' cab.', s: 24 * sc, b: 1 });
+      }
+      var total = lines.reduce(function (s, x) { return s + x.s * 1.15; }, 0), y = inf.c[1] + nd[1] - total / 2;
+      svg += '<g data-pot="' + n + '" style="cursor:pointer"><polygon points="' + pts.map(function (q) { return q.join(','); }).join(' ') + '" fill="' + (l ? color.get(l.name) : 'var(--line)') + '" fill-opacity="' + (l ? '0.92' : '0.7') + '" stroke="var(--surface)" stroke-width="3" stroke-linejoin="round"/>';
+      lines.forEach(function (x) {
+        y += x.s * 1.15;
+        svg += '<text x="' + (inf.c[0] + nd[0]) + '" y="' + (y - x.s * 0.2) + '" text-anchor="middle" font-size="' + x.s.toFixed(1) + '" font-weight="' + (x.b ? 700 : 500) + '" ' +
+          (l ? 'fill="#fff" stroke="rgba(0,0,0,.55)" stroke-width="3.5" paint-order="stroke"' : 'fill="var(--fg)"') + '>' + esc(x.t) + '</text>';
+      });
+      svg += '</g>';
+    });
+    svg += '</svg>';
+    var h = svg;
+    h += '<div class="bars" style="margin-top:12px">' + act.map(function (l) {
+      return '<div style="display:flex;align-items:center;gap:8px;font-size:14px"><i style="width:14px;height:14px;border-radius:3px;background:' + color.get(l.name) + ';flex:none"></i><b>' + esc(l.name) + '</b><span class="hint">' + cabOf(l) + ' cab. · potrero' + (l.potreros.length > 1 ? 's ' : ' ') + (l.potreros.join(', ') || '-') + '</span></div>';
+    }).join('') + '</div>';
+    h += '<p class="fine" style="margin-top:10px">Tocá un potrero para ver su lote o crear uno. En un lote con varios potreros se muestra el total del lote en cada uno. Plano dibujado sobre tu imagen: los potreros 6, 8 y 10 están ubicados por orden.</p>';
+    $('mapaBox').innerHTML = h;
+  }
+  $('campoVista').addEventListener('click', function (e) {
+    var b = e.target.closest('[data-cv]');
+    if (!b) return;
+    campoView = b.getAttribute('data-cv'); lsSet('rt_campo_view', campoView);
+    renderCampo();
+  });
+  $('mapaBox').addEventListener('click', function (e) {
+    var g = e.target.closest('[data-pot]');
+    if (g) openPotrero(+g.getAttribute('data-pot'));
+  });
+  function openPotrero(n) {
+    var p = potreros[n - 1] || { ha: 0 }, l = activeLotes().filter(function (x) { return x.potreros.indexOf(n) >= 0; })[0];
+    cState = { mode: 'pot' };
+    var h = '<h2>Potrero ' + n + '</h2><p class="hint" style="margin:0">' + nf(p.ha, 2) + ' ha</p>';
+    if (!l) {
+      h += '<p style="margin:0">Está libre.</p><div class="acts"><button type="button" class="btn primary" data-ma="new" data-n="' + n + '">Crear lote en este potrero</button><button type="button" class="btn" id="cCancel">Cerrar</button></div>';
+    } else {
+      var o = stk.get(l.name) || emptyCounts();
+      h += '<div class="lhead"><b>' + esc(l.name) + '</b><span class="hint">' + esc(potLabel(l)) + '</span></div><div class="sumgrid" style="margin:0"><div><b>' + loteTotal(o) + '</b><span>Total</span></div>';
+      CATS_ALL.forEach(function (c) { if (o[c]) h += '<div><b>' + o[c] + '</b><span>' + esc(c) + '</span></div>'; });
+      h += '</div><div class="acts"><button type="button" class="btn small" data-ma="ajuste" data-l="' + esc(l.name) + '">Cargar cantidades</button><button type="button" class="btn small" data-ma="mover" data-l="' + esc(l.name) + '">Mover hacienda</button><button type="button" class="btn small" data-ma="fusion" data-l="' + esc(l.name) + '">Fusionar</button><button type="button" class="btn small" data-ma="edit" data-l="' + esc(l.name) + '">Editar</button><button type="button" class="btn" id="cCancel">Cerrar</button></div>';
+    }
+    openC(h);
+  }
+
+  /* --- registrar --- */
+  var REG_TIPOS = [['nac', 'Nacimientos'], ['mue', 'Muertes'], ['ven', 'Ventas'], ['tac', 'Tacto'], ['vac', 'Vacunación'], ['pes', 'Pesadas'], ['car', 'Caravanear terneros']];
+  var CAUSAS = ['Sin causa conocida', 'Enfermedad', 'Parto', 'Accidente', 'Clima', 'Robo o abigeato', 'Otra'];
+  var VACUNAS = ['Aftosa', 'Brucelosis', 'Carbunclo', 'Clostridiales', 'Queratoconjuntivitis', 'Reproductiva'];
+  function loteSel() {
+    var act = activeLotes();
+    if (!act.length) return '';
+    if (!regLote || !lotes.has(regLote)) regLote = act[0].name;
+    return fSel('rLote', 'Lote', act.map(function (l) { return [l.name, l.name]; }), regLote);
+  }
+  function regFormHtml() {
+    if (!activeLotes().length) return '<div class="empty"><b>Primero creá un lote</b>Entrá a Campo y lotes y armá al menos un lote.</div>';
+    var h = '<div class="two">' + fDate('rFecha', 'Fecha') + loteSel() + '</div>';
+    if (regTipo === 'nac') {
+      h += '<div class="two">' + fInt('rM', 'Machos nacidos', '') + fInt('rH', 'Hembras nacidas', '') + '</div>';
+      h += '<p class="hint" style="margin:0">Quedan como terneros (machos) o terneras (hembras) sin caravana del lote. Cuando los vacunás, en "Caravanear terneros" les ponés el tag.</p>';
+    } else if (regTipo === 'mue') {
+      h += '<div class="two">' + fSel('rCat', 'Categoría', CATS_ALL, CATS[0]) + fInt('rN', 'Cantidad', 1) + '</div>';
+      h += '<div class="two">' + fSel('rCausa', 'Causa', CAUSAS, CAUSAS[0]) + fTxt('rCar', 'Caravana (terneros con tag)', 'Pasá el tag') + '</div>';
+    } else if (regTipo === 'ven') {
+      var tm = Array.from(tropasMap().keys());
+      h += '<div class="two">' + fSel('rCat', 'Categoría', CATS, CATS[0]) + fInt('rN', 'Cantidad', '') + '</div>';
+      if (tm.length) h += fSel('rTropa', 'O vender una tropa de terneros con caravana', [['', 'Ninguna']].concat(tm.map(function (n) { return [n, n]; })), '');
+      h += fTxt('rComp', 'Comprador o destino', 'Frigorífico, consignatario...');
+      h += '<div class="two">' + fNum('rKg', 'Kilos totales', '') + fNum('rPr', 'Importe total ($)', '') + '</div>';
+    } else if (regTipo === 'tac') {
+      h += '<div class="two">' + fSel('rCat', 'Categoría', ['Vacas', 'Vaquillonas'], 'Vacas') + fInt('rT', 'Tactadas', '') + '</div>';
+      h += '<div class="two">' + fInt('rP', 'Preñadas', '') + '<div class="field"><span class="label">Preñez</span><b id="rPct" style="font-family:var(--font-display);font-size:30px;line-height:44px">-</b></div></div>';
+    } else if (regTipo === 'vac') {
+      h += '<div class="two">' + fSel('rCat', 'Categoría', ['Todas'].concat(CATS_ALL), 'Todas') + fInt('rN', 'Animales vacunados', '') + '</div>';
+      h += fTxt('rVac', 'Vacuna', 'Aftosa', 'Aftosa', 'vacList') + '<datalist id="vacList">' + VACUNAS.map(function (v) { return '<option value="' + v + '">'; }).join('') + '</datalist>';
+    } else if (regTipo === 'pes') {
+      h += '<div class="two">' + fSel('rCat', 'Categoría', ['Todas'].concat(CATS_ALL), 'Todas') + fInt('rN', 'Animales pesados', '') + '</div>';
+      h += fNum('rKg', 'Peso promedio (kg)', '');
+    }
+    h += fld('rObs', 'Observaciones', '<textarea id="rObs" maxlength="500" style="min-height:56px"></textarea>');
+    h += '<div class="acts"><button type="button" class="btn primary" id="rSave">Guardar registro</button></div>';
+    return h;
+  }
+  function fillN() {
+    var n = $('rN'), c = $('rCat'), l = $('rLote');
+    if (!n || !c || !l || n.dataset.t === '1' || (regTipo !== 'vac' && regTipo !== 'pes')) return;
+    var o = stk.get(l.value) || emptyCounts();
+    n.value = c.value === 'Todas' ? loteTotal(o) : (o[c.value] || 0);
+  }
+  function renderReg() {
+    $('regTipos').innerHTML = REG_TIPOS.map(function (t) { return '<button type="button" class="cbtn" data-rt="' + t[0] + '" aria-pressed="' + (regTipo === t[0]) + '">' + t[1] + '</button>'; }).join('');
+    $('regCar').hidden = regTipo !== 'car';
+    $('regForm').hidden = regTipo === 'car';
+    $('pill').hidden = !hasScanner();
+    if (regTipo === 'car') renderCar(); else { $('regForm').innerHTML = regFormHtml(); fillN(); }
+    renderRegList();
+    if (hasScanner()) focusScan();
+  }
+  $('regTipos').addEventListener('click', function (e) {
+    var b = e.target.closest('[data-rt]');
+    if (!b) return;
+    regTipo = b.getAttribute('data-rt'); say('');
+    renderReg();
+  });
+  $('regForm').addEventListener('change', function (e) {
+    if (e.target.id === 'rLote') regLote = e.target.value;
+    if (e.target.id === 'rLote' || e.target.id === 'rCat') fillN();
+  });
+  $('regForm').addEventListener('input', function (e) {
+    if (e.target.id === 'rN') e.target.dataset.t = '1';
+    if (e.target.id === 'rT' || e.target.id === 'rP') {
+      var t = iv('rT'), p = iv('rP');
+      $('rPct').textContent = t > 0 ? pctTxt(p, t) : '-';
+    }
+  });
+  $('regForm').addEventListener('click', function (e) { if (e.target.id === 'rSave') saveReg(); });
+
+  function saveReg() {
+    var fecha = $('rFecha').value || todayStr(), lote = $('rLote') ? $('rLote').value : '';
+    if (!lote) { say('Elegí un lote.'); return; }
+    regLote = lote;
+    var obs = $('rObs') ? $('rObs').value.trim() : '', o = stk.get(lote) || emptyCounts(), msg = '', cat, n, a;
+    if (regTipo === 'nac') {
+      var m = iv('rM'), h = iv('rH');
+      if (!m && !h) { say('Escribí cuántos machos o hembras nacieron.'); return; }
+      if (m) evCommit(mkEv('nacimiento', lote, CATS[4], m, '', 'Macho', '', obs, fecha));
+      if (h) evCommit(mkEv('nacimiento', lote, CATS[5], h, '', 'Hembra', '', obs, fecha));
+      msg = 'Nacimientos guardados: ' + (m + h) + ' en "' + lote + '".';
+    } else if (regTipo === 'mue') {
+      cat = $('rCat').value; n = iv('rN');
+      var car = $('rCar').value.trim(), causa = $('rCausa').value;
+      if (isTag(cat) || car) {
+        if (!car) { say('Para un ternero con caravana, pasá el tag.'); return; }
+        a = animals.get(car);
+        if (!a) { say('La caravana ' + car + ' no está cargada.'); return; }
+        if (a.baja) { say('Esa caravana ya está dada de baja.'); return; }
+        if (a.tropa) { say('Esa caravana está en la tropa "' + a.tropa + '".'); return; }
+        commit({ t: 'A', rec: mkRec(car, { baja: 'Muerte', fechaBaja: fecha }) }, true);
+        evCommit(mkEv('muerte', a.lote || lote, tagCat(a.sexo), 1, causa, car, '', obs, fecha));
+        msg = 'Muerte de la caravana ' + car + ' registrada.';
+      } else {
+        if (!n) { say('Escribí la cantidad.'); return; }
+        if (n > (o[cat] || 0)) { say('El lote "' + lote + '" tiene ' + (o[cat] || 0) + ' ' + cat.toLowerCase() + '.'); return; }
+        evCommit(mkEv('muerte', lote, cat, n, causa, '', '', obs, fecha));
+        msg = 'Muertes registradas: ' + n + ' ' + cat.toLowerCase() + ' en "' + lote + '".';
+      }
+    } else if (regTipo === 'ven') {
+      cat = $('rCat').value; n = iv('rN');
+      var tr = $('rTropa') ? $('rTropa').value : '', obs2 = obs;
+      if (tr) {
+        var t0 = tropasMap().get(tr);
+        if (!t0) { say('No encuentro esa tropa.'); return; }
+        obs2 = ('Tropa ' + tr + (obs ? ' · ' + obs : ''));
+        var th = t0.codes.filter(function (c) { return (animals.get(c) || {}).sexo === 'Hembra'; }).length, tmn = t0.codes.length - th, tn = t0.codes.length;
+        var kgT = num($('rKg').value), prT = num($('rPr').value), comp = $('rComp').value.trim();
+        if (tmn) evCommit(mkEv('venta', lote, TAGCAT, tmn, comp, kgT ? kgT * tmn / tn : '', prT ? prT * tmn / tn : '', obs2, fecha));
+        if (th) evCommit(mkEv('venta', lote, TAGCAT2, th, comp, kgT ? kgT * th / tn : '', prT ? prT * th / tn : '', obs2, fecha));
+        finishBatch(); say('Venta de la tropa "' + tr + '" registrada: ' + tn + ' terneros.'); renderReg(); return;
+      } else {
+        if (!n) { say('Escribí la cantidad vendida.'); return; }
+        if (n > (o[cat] || 0)) { say('El lote "' + lote + '" tiene ' + (o[cat] || 0) + ' ' + cat.toLowerCase() + '.'); return; }
+      }
+      evCommit(mkEv('venta', lote, cat, n, $('rComp').value.trim(), num($('rKg').value) || '', num($('rPr').value) || '', obs2, fecha));
+      msg = 'Venta registrada: ' + n + ' ' + cat.toLowerCase() + '.';
+    } else if (regTipo === 'tac') {
+      var T = iv('rT'), P = iv('rP');
+      if (!T) { say('Escribí cuántas se tactaron.'); return; }
+      if (P > T) { say('Las preñadas no pueden ser más que las tactadas.'); return; }
+      evCommit(mkEv('tacto', lote, $('rCat').value, T, '', P, '', obs, fecha));
+      msg = 'Tacto guardado: ' + P + ' preñadas de ' + T + ' (' + pctTxt(P, T) + ').';
+    } else if (regTipo === 'vac') {
+      n = iv('rN');
+      var vn = $('rVac').value.trim();
+      if (!vn) { say('Escribí qué vacuna se aplicó.'); return; }
+      if (!n) { say('Escribí cuántos animales se vacunaron.'); return; }
+      evCommit(mkEv('vacunacion', lote, $('rCat').value, n, vn, '', '', obs, fecha));
+      msg = 'Vacunación guardada: ' + vn + ', ' + n + ' animales.';
+    } else if (regTipo === 'pes') {
+      n = iv('rN');
+      var kg = num($('rKg').value);
+      if (!n || !kg) { say('Escribí cuántos animales se pesaron y el peso promedio.'); return; }
+      evCommit(mkEv('pesada', lote, $('rCat').value, n, '', kg, '', obs, fecha));
+      msg = 'Pesada guardada: ' + nf(kg) + ' kg promedio.';
+    }
+    finishBatch(); say(msg); renderReg();
+  }
+
+  function movText(e) {
+    var t = TIPOS[e.tipo] || e.tipo, d = '';
+    var what = e.n + ' ' + (e.cat || '').toLowerCase();
+    if (e.tipo === 'nacimiento') d = e.n + ' ' + (e.g === 'Macho' ? 'machos' : e.g === 'Hembra' ? 'hembras' : 'terneros');
+    else if (e.tipo === 'muerte') d = what + (e.f ? ' · ' + e.f : '') + (e.g ? ' · caravana ' + e.g : '');
+    else if (e.tipo === 'venta') d = what + (e.f ? ' · ' + e.f : '') + (num(e.g) ? ' · ' + nf(num(e.g), 0) + ' kg' : '') + (num(e.h) ? ' · ' + money(num(e.h)) : '');
+    else if (e.tipo === 'tacto') d = num(e.g) + ' preñadas de ' + e.n + ' ' + (e.cat || '').toLowerCase() + ' (' + pctTxt(num(e.g), e.n) + ')';
+    else if (e.tipo === 'vacunacion') d = (e.f || '') + ' · ' + e.n + ' (' + (e.cat || '').toLowerCase() + ')';
+    else if (e.tipo === 'pesada') d = e.n + ' ' + (e.cat || '').toLowerCase() + ' · ' + nf(num(e.g)) + ' kg promedio';
+    else if (e.tipo === 'traslado') d = what + ' → ' + e.f;
+    else if (e.tipo === 'caravaneo') d = e.n + ' terneros con caravana';
+    else d = (e.n > 0 ? '+' : '') + e.n + ' ' + (e.cat || '').toLowerCase();
+    return { t: t + ' · ' + (e.lote || '-'), d: d + (e.obs && e.tipo !== 'alta' ? ' · ' + e.obs : '') };
+  }
+  function renderRegList() {
+    var list = movs.slice().sort(function (x, y) { return (y.fecha + y.id) < (x.fecha + x.id) ? -1 : 1; }).slice(0, 25), h = '';
+    list.forEach(function (e) {
+      var x = movText(e);
+      h += '<li><div class="row split"><div class="info"><span class="nm" style="font-family:var(--font-body);font-weight:600">' + esc(x.t) + '</span><span class="cd">' + esc(fmtDate(e.fecha) + ' · ' + x.d) + (e.pending ? ' · subiendo' : '') + '</span></div>' +
+        '<button type="button" class="btn small danger" data-del="' + esc(e.id) + '">' + (pendingDel === e.id ? '¿Seguro?' : 'Borrar') + '</button></div></li>';
+    });
+    $('regList').innerHTML = h;
+    $('regList').hidden = !list.length;
+    $('regEmpty').hidden = list.length > 0;
+  }
+  $('regList').addEventListener('click', async function (e) {
+    var b = e.target.closest('[data-del]');
+    if (!b) return;
+    var id = b.getAttribute('data-del');
+    if (pendingDel !== id) {
+      pendingDel = id; clearTimeout(delTimer);
+      delTimer = setTimeout(function () { pendingDel = null; renderRegList(); }, 4000);
+      renderRegList(); return;
+    }
+    pendingDel = null; clearTimeout(delTimer);
+    var m = movs.find(function (x) { return x.id === id; });
+    if (!m) { renderRegList(); return; }
+    try { await removeMov(m); say('Registro borrado.'); } catch (err) { say(errText(err)); }
+  });
+  async function removeMov(m) {
+    if (m.tipo === 'muerte' && isTag(m.cat) && m.g) {
+      var an = animals.get(m.g);
+      if (an && an.baja) commit({ t: 'A', rec: mkRec(m.g, { baja: '', fechaBaja: '' }) }, true);
+    }
+    if (m.pending) {
+      var i = outbox.findIndex(function (o) { return o.t === 'M' && o.rec.id === m.id; });
+      if (i >= 0) { outbox.splice(i, 1); persistOutbox(); }
+      rebuild(); scheduleFlush(); return;
+    }
+    if (!mcp) { base.movs = base.movs.filter(function (x) { return x.id !== m.id; }); saveCache(); rebuild(); return; }
+    if (!m.row) throw { code: 'tool_error', message: 'Esperá a que termine de sincronizar y probá de nuevo.' };
+    await exclusive(async function () {
+      if (!(await verifyCell('Movimientos!J' + m.row, m.id))) {
+        await loadAll();
+        throw { code: 'tool_error', message: 'La planilla cambió. Revisá la lista y probá de nuevo.' };
+      }
+      await deleteRow(SHEET_MOVS, m.row);
+      await loadAll();
+    });
+    rebuild(); scheduleFlush();
+  }
+
+  /* --- caravanear terneros (al vacunar) --- */
+  function renderCar() {
+    var act = activeLotes();
+    if (!draftC.lote || !lotes.has(draftC.lote)) draftC.lote = act.length ? act[0].name : '';
+    $('cLote').innerHTML = act.map(function (l) { return '<option value="' + esc(l.name) + '"' + (l.name === draftC.lote ? ' selected' : '') + '>' + esc(l.name) + '</option>'; }).join('');
+    $('cSexo').value = draftC.sexo; $('cNac').value = draftC.nac || ''; $('cVac').checked = !!draftC.vac; $('cVacN').value = draftC.vacuna || 'Aftosa';
+    $('cVacN').hidden = !draftC.vac;
+    renderCarList();
+  }
+  function renderCarList() {
+    var o = stk.get(draftC.lote), sc = o ? o[sexCat(draftC.sexo)] || 0 : 0;
+    $('cHint').textContent = draftC.lote ? 'En "' + draftC.lote + '" hay ' + sc + (draftC.sexo === 'Hembra' ? ' terneras' : ' terneros') + ' sin caravana registrados.' : 'Primero creá un lote en Campo y lotes.';
+    $('cCount').textContent = draftC.codes.length;
+    var h = '';
+    draftC.codes.forEach(function (c) {
+      h += '<li><div class="row split"><span class="nm" style="font-family:var(--font-mono);font-weight:500;overflow-wrap:anywhere">' + esc(c) + '</span><button type="button" class="btn small danger" data-cq="' + esc(c) + '">Quitar</button></div></li>';
+    });
+    $('cList').innerHTML = h; $('cList').hidden = !draftC.codes.length;
+    $('cConfirm').disabled = !draftC.codes.length; $('cClear').disabled = !draftC.codes.length;
+  }
+  function handleCarScan(code) {
+    var now = Date.now();
+    if (code === lastCode && now - lastAt < 1200) { lastAt = now; return; }
+    lastCode = code; lastAt = now;
+    if (!draftC.lote) { beepErr(); say('Elegí un lote primero.'); return; }
+    if (animals.has(code)) { beepErr(); say('La caravana ' + code + ' ya está cargada. Revisala en Cargar novedades.'); return; }
+    if (draftC.codes.indexOf(code) >= 0) { beepErr(); say('La caravana ' + code + ' ya está en la lista.'); return; }
+    beep(); say('');
+    draftC.codes.unshift(code); saveDraftC(); renderCarList();
+  }
+  wireScan($('scanC'), handleCarScan);
+  wireManual('scanC', 'kbC', 'addC', handleCarScan);
+  $('regCar').addEventListener('change', function (e) {
+    if (e.target.id === 'cLote') draftC.lote = e.target.value;
+    else if (e.target.id === 'cSexo') draftC.sexo = e.target.value;
+    else if (e.target.id === 'cNac') draftC.nac = e.target.value;
+    else if (e.target.id === 'cVac') { draftC.vac = e.target.checked; $('cVacN').hidden = !draftC.vac; }
+    else if (e.target.id === 'cVacN') draftC.vacuna = e.target.value.trim() || 'Aftosa';
+    saveDraftC(); renderCarList(); focusScan();
+  });
+  $('cList').addEventListener('click', function (e) {
+    var b = e.target.closest('[data-cq]');
+    if (!b) return;
+    var c = b.getAttribute('data-cq');
+    draftC.codes = draftC.codes.filter(function (x) { return x !== c; });
+    saveDraftC(); renderCarList(); focusScan();
+  });
+  $('cClear').onclick = function () { draftC.codes = []; saveDraftC(); renderCarList(); say('Lista vaciada.'); focusScan(); };
+  $('cConfirm').onclick = function () {
+    var codes = draftC.codes.slice().reverse(), n = codes.length, lote = draftC.lote, fecha = todayStr();
+    if (!n || !lote) return;
+    var o = stk.get(lote) || emptyCounts(), avail = o[sexCat(draftC.sexo)] || 0, short = Math.max(0, n - avail);
+    codes.forEach(function (c) {
+      commit({ t: 'A', rec: mkRec(c, { nacimiento: draftC.nac || '', sexo: draftC.sexo, lote: lote, observaciones: 'Caravaneado el ' + fmtDate(fecha) }) }, true);
+    });
+    if (short) evCommit(mkEv('nacimiento', lote, sexCat(draftC.sexo), short, '', draftC.sexo, '', 'Sin nacimiento cargado antes', fecha));
+    evCommit(mkEv('caravaneo', lote, sexCat(draftC.sexo), n, '', draftC.sexo, '', '', fecha));
+    if (draftC.vac) evCommit(mkEv('vacunacion', lote, tagCat(draftC.sexo), n, draftC.vacuna || 'Aftosa', '', '', 'Al caravanear', fecha));
+    draftC.codes = []; saveDraftC();
+    finishBatch(); renderCarList();
+    say(n + (n === 1 ? ' ternero quedó' : ' terneros quedaron') + ' con caravana en "' + lote + '"' + (draftC.vac ? ' y vacunados (' + (draftC.vacuna || 'Aftosa') + ').' : '.'));
+    focusScan();
+  };
+
+  /* --- informes --- */
+  function infSections() {
+    var yr = infYear, S = [];
+    var ev = movs.filter(function (e) { return yr === 'all' || String(e.fecha || '').slice(0, 4) === yr; });
+    function of(t) { return ev.filter(function (e) { return e.tipo === t; }); }
+    function monthItems(list, f) {
+      return aggBy(list, function (e) { return String(e.fecha).slice(0, 7); }).map(function (g) { var v = sumBy(g.items, f); return { l: monthLabel(g.k), v: v, t: nf(v, 0) }; });
+    }
+    // stock
+    var act = activeLotes(), rows = [], T = emptyCounts(), haS = 0, tt;
+    act.forEach(function (l) {
+      var o = stk.get(l.name) || emptyCounts(), ha = loteHa(l), t = loteTotal(o);
+      CATS_ALL.forEach(function (c) { T[c] += o[c] || 0; }); haS += ha;
+      rows.push([l.name, l.potreros.join(', ') || '-', nf(ha, 2)].concat(CATS_ALL.map(function (c) { return o[c] || 0; })).concat([t, ha > 0 ? nf(t / ha, 2) : '-']));
+    });
+    if (rows.length) { tt = loteTotal(T); rows.push(['Total', '', nf(haS)].concat(CATS_ALL.map(function (c) { return T[c]; })).concat([tt, haS > 0 ? nf(tt / haS, 2) : '-'])); }
+    S.push({ title: 'Hacienda actual por lote', head: ['Lote', 'Potreros', 'Ha', 'Vacas', 'Vaq.', 'Toros', 'Novillos', 'Tern. s/car.', 'Terneras s/car.', 'Tern. c/car.', 'Terneras c/car.', 'Total', 'Cab./ha'], rows: rows, total: true, note: 'Incluye hacienda con y sin caravana. No depende del año elegido.' });
+    // preñez
+    var tac = of('tacto'), prow = [], pch = [], ta = 0, tp = 0;
+    aggBy(tac, function (e) { return e.lote + '|' + e.cat; }).forEach(function (g) {
+      var a = sumBy(g.items, function (e) { return e.n; }), p = sumBy(g.items, function (e) { return num(e.g); }), pr = g.k.split('|');
+      ta += a; tp += p;
+      prow.push([pr[0], pr[1], a, p, a - p, pctTxt(p, a)]);
+      pch.push({ l: pr[0] + ' · ' + pr[1], v: a ? p / a * 100 : 0, t: pctTxt(p, a) });
+    });
+    if (prow.length) prow.push(['Total', '', ta, tp, ta - tp, pctTxt(tp, ta)]);
+    S.push({ title: 'Tactos y porcentaje de preñez', head: ['Lote', 'Categoría', 'Tactadas', 'Preñadas', 'Vacías', '% preñez'], rows: prow, chart: pch, pct: true, total: true });
+    if (yr === 'all') {
+      var yrs = aggBy(tac, function (e) { return String(e.fecha).slice(0, 4); });
+      if (yrs.length > 1) {
+        var yrow = [], ych = [];
+        yrs.forEach(function (g) {
+          var a = sumBy(g.items, function (e) { return e.n; }), p = sumBy(g.items, function (e) { return num(e.g); });
+          yrow.push([g.k, a, p, pctTxt(p, a)]); ych.push({ l: g.k, v: a ? p / a * 100 : 0, t: pctTxt(p, a) });
+        });
+        S.push({ title: 'Preñez por año', head: ['Año', 'Tactadas', 'Preñadas', '% preñez'], rows: yrow, chart: ych, pct: true });
+      }
+    }
+    // nacimientos
+    var nac = of('nacimiento'), nrow = [], nm = 0, nh = 0;
+    aggBy(nac, function (e) { return e.lote; }).forEach(function (g) {
+      var m = sumBy(g.items, function (e) { return e.g === 'Macho' ? e.n : 0; }), h = sumBy(g.items, function (e) { return e.g === 'Hembra' ? e.n : 0; });
+      var rest = sumBy(g.items, function (e) { return e.n; }) - m - h;
+      nm += m; nh += h; nrow.push([g.k, m, h, m + h + rest]);
+    });
+    var ntot = sumBy(nac, function (e) { return e.n; }), vacasNow = T['Vacas'] || 0;
+    if (nrow.length) nrow.push(['Total', nm, nh, ntot]);
+    S.push({ title: 'Nacimientos', head: ['Lote', 'Machos', 'Hembras', 'Total'], rows: nrow, chart: monthItems(nac, function (e) { return e.n; }), total: true, note: ntot && vacasNow ? 'Parición: ' + pctTxt(ntot, vacasNow) + ' sobre las ' + vacasNow + ' vacas que hay hoy.' : '' });
+    // mortandad
+    var mue = of('muerte'), mt = sumBy(mue, function (e) { return e.n; }), stockNow = 0;
+    stk.forEach(function (o, k) { var l = lotes.get(k); if (l && l.estado !== 'Cerrado') stockNow += loteTotal(o); });
+    var mrow = [];
+    aggBy(mue, function (e) { return e.f || 'Sin causa conocida'; }).forEach(function (g) { var c = sumBy(g.items, function (e) { return e.n; }); mrow.push([g.k, c, pctTxt(c, mt)]); });
+    if (mrow.length) mrow.push(['Total', mt, '100 %']);
+    var mcat = aggBy(mue, function (e) { return e.cat; }).map(function (g) { var c = sumBy(g.items, function (e) { return e.n; }); return { l: g.k, v: c, t: nf(c, 0) }; });
+    S.push({ title: 'Mortandad', head: ['Causa', 'Cabezas', '% del total'], rows: mrow, chart: monthItems(mue, function (e) { return e.n; }), total: true, note: mt ? 'Mortandad: ' + pctTxt(mt, stockNow + mt) + ' (' + mt + ' muertes sobre ' + (stockNow + mt) + ' animales entre hacienda actual y bajas).' : '' });
+    if (mcat.length) S.push({ title: 'Mortandad por categoría', head: ['Categoría', 'Cabezas'], rows: mcat.map(function (x) { return [x.l, x.v]; }), chart: mcat });
+    // ventas
+    var ven = of('venta'), vrow = [], vk = 0, vp = 0, vn = 0;
+    aggBy(ven, function (e) { return e.cat; }).forEach(function (g) {
+      var c = sumBy(g.items, function (e) { return e.n; }), k = sumBy(g.items, function (e) { return num(e.g); }), p = sumBy(g.items, function (e) { return num(e.h); });
+      vn += c; vk += k; vp += p; vrow.push([g.k, c, nf(k, 0), p ? money(p) : '-', k && p ? money(p / k) : '-']);
+    });
+    if (vrow.length) vrow.push(['Total', vn, nf(vk, 0), vp ? money(vp) : '-', vk && vp ? money(vp / vk) : '-']);
+    S.push({ title: 'Ventas por categoría', head: ['Categoría', 'Cabezas', 'Kilos', 'Importe', '$/kg'], rows: vrow, chart: monthItems(ven, function (e) { return e.n; }), total: true });
+    var vbuy = [];
+    aggBy(ven, function (e) { return e.f || 'Sin dato'; }).forEach(function (g) {
+      var c = sumBy(g.items, function (e) { return e.n; }), k = sumBy(g.items, function (e) { return num(e.g); }), p = sumBy(g.items, function (e) { return num(e.h); });
+      vbuy.push([g.k, c, nf(k, 0), p ? money(p) : '-']);
+    });
+    if (vbuy.length > 0) S.push({ title: 'Ventas por comprador', head: ['Comprador', 'Cabezas', 'Kilos', 'Importe'], rows: vbuy });
+    // vacunaciones
+    var vac = of('vacunacion'), varow = [], vlast = [];
+    aggBy(vac, function (e) { return e.f || 'Sin dato'; }).forEach(function (g) {
+      var last = g.items.reduce(function (m, e) { return e.fecha > m ? e.fecha : m; }, '');
+      varow.push([g.k, g.items.length, sumBy(g.items, function (e) { return e.n; }), fmtDate(last)]);
+    });
+    aggBy(vac, function (e) { return e.lote + '|' + (e.f || 'Sin dato'); }).forEach(function (g) {
+      var s = g.items.slice().sort(function (a, b) { return a.fecha < b.fecha ? 1 : -1; })[0], pr = g.k.split('|');
+      vlast.push([pr[0], pr[1], fmtDate(s.fecha), s.n, s.cat]);
+    });
+    S.push({ title: 'Vacunaciones por vacuna', head: ['Vacuna', 'Aplicaciones', 'Animales', 'Última'], rows: varow, chart: varow.map(function (r) { return { l: r[0], v: r[2], t: nf(r[2], 0) }; }) });
+    S.push({ title: 'Última vacunación por lote', head: ['Lote', 'Vacuna', 'Fecha', 'Animales', 'Categoría'], rows: vlast });
+    // pesadas
+    var prw = [];
+    aggBy(of('pesada'), function (e) { return e.lote + '|' + e.cat; }).forEach(function (g) {
+      var s = g.items.slice().sort(function (a, b) { return a.fecha < b.fecha ? -1 : a.fecha > b.fecha ? 1 : 0; });
+      var l = s[s.length - 1], p = s.length > 1 ? s[s.length - 2] : null, gdp = '-', pr = g.k.split('|');
+      if (p) { var d = (Date.parse(l.fecha) - Date.parse(p.fecha)) / 86400000; if (d > 0) gdp = nf((num(l.g) - num(p.g)) / d, 2) + ' kg/día'; }
+      prw.push([pr[0], pr[1], fmtDate(l.fecha), l.n, nf(num(l.g)), p ? nf(num(p.g)) : '-', gdp]);
+    });
+    S.push({ title: 'Pesadas y ganancia diaria', head: ['Lote', 'Categoría', 'Fecha', 'Animales', 'Kg prom.', 'Kg anterior', 'Ganancia'], rows: prw, note: 'La ganancia compara las dos últimas pesadas del mismo lote y categoría.' });
+    return S;
+  }
+  function barsHtml(items, pct) {
+    var max = pct ? 100 : Math.max.apply(null, items.map(function (i) { return i.v; }).concat([1]));
+    return '<div class="bars">' + items.map(function (i) {
+      return '<div class="bar"><span class="bl">' + esc(i.l) + '</span><div class="tr"><div class="fi" style="width:' + Math.max(0, Math.min(100, i.v / max * 100)) + '%"></div></div><span class="v">' + esc(i.t != null ? i.t : nf(i.v)) + '</span></div>';
+    }).join('') + '</div>';
+  }
+  function renderInf() {
+    var years = {};
+    movs.forEach(function (e) { if (e.fecha) years[String(e.fecha).slice(0, 4)] = 1; });
+    var ys = Object.keys(years).sort().reverse();
+    if (infYear !== 'all' && !years[infYear]) infYear = 'all';
+    $('infYears').innerHTML = [['all', 'Todos los años']].concat(ys.map(function (y) { return [y, y]; })).map(function (o) {
+      return '<button type="button" class="cbtn" data-y="' + o[0] + '" aria-pressed="' + (infYear === o[0]) + '">' + o[1] + '</button>';
+    }).join('');
+    var h = '';
+    infSections().forEach(function (s) {
+      h += '<section><h2 class="sec" style="margin-bottom:8px">' + esc(s.title) + '</h2>';
+      if (!s.rows.length) { h += '<div class="panel empty" style="padding:14px">Sin datos todavía.</div></section>'; return; }
+      if (s.chart && s.chart.length) h += '<div class="panel" style="margin-bottom:8px">' + barsHtml(s.chart, s.pct) + '</div>';
+      h += '<div class="tblwrap"><table class="tbl"><tr>' + s.head.map(function (c) { return '<th>' + esc(c) + '</th>'; }).join('') + '</tr>';
+      s.rows.forEach(function (r, i) {
+        h += '<tr' + (s.total && i === s.rows.length - 1 ? ' class="tot"' : '') + '>' + r.map(function (c) { return '<td>' + esc(c) + '</td>'; }).join('') + '</tr>';
+      });
+      h += '</table></div>' + (s.note ? '<p class="hint" style="margin-top:6px">' + esc(s.note) + '</p>' : '') + '</section>';
+    });
+    $('infBody').innerHTML = h;
+    $('infPdf').hidden = !downloads;
+  }
+  $('infYears').addEventListener('click', function (e) {
+    var b = e.target.closest('[data-y]');
+    if (!b) return;
+    infYear = b.getAttribute('data-y'); renderInf();
+  });
+  $('infPdf').onclick = async function () {
+    if (!downloads) { say('Esta vista no puede guardar archivos.'); return; }
+    if (!window.jspdf || !window.jspdf.jsPDF) { say('No se pudo cargar el generador de PDF. Recargá la página.'); return; }
+    try {
+      var doc = new window.jspdf.jsPDF({ unit: 'mm', format: 'a4' }), M = 15, W = 180, y = M;
+      doc.setFont('helvetica', 'bold'); doc.setFontSize(18);
+      doc.text('Informe de hacienda', M, y + 6); y += 12;
+      doc.setFont('helvetica', 'normal'); doc.setFontSize(10);
+      doc.text((infYear === 'all' ? 'Todos los años' : 'Año ' + infYear) + '  ·  Generado el ' + fmtDate(todayStr()), M, y); y += 8;
+      infSections().forEach(function (s) {
+        if (!s.rows.length) return;
+        var nc = s.head.length, first = nc > 6 ? 30 : 45, cw = (W - first) / (nc - 1);
+        if (y > 255) { doc.addPage(); y = M + 4; }
+        doc.setFont('helvetica', 'bold'); doc.setFontSize(12); doc.text(s.title, M, y); y += 6;
+        function row(cells, bold) {
+          doc.setFont('helvetica', bold ? 'bold' : 'normal'); doc.setFontSize(nc > 8 ? 7 : 9);
+          cells.forEach(function (c, i) {
+            var x = i === 0 ? M : M + first + cw * (i - 1) + cw;
+            var txt = String(c);
+            if (i === 0) { while (txt.length > 2 && doc.getTextWidth(txt) > first - 2) txt = txt.slice(0, -1); doc.text(txt, x, y); }
+            else { while (txt.length > 2 && doc.getTextWidth(txt) > cw - 1) txt = txt.slice(0, -1); doc.text(txt, x, y, { align: 'right' }); }
+          });
+          y += 5.5;
+        }
+        function head() { doc.setFillColor(230, 230, 230); doc.rect(M, y - 4.2, W, 6, 'F'); row(s.head, true); }
+        head();
+        s.rows.forEach(function (r, i) {
+          if (y > 280) { doc.addPage(); y = M + 4; head(); }
+          row(r, s.total && i === s.rows.length - 1);
+        });
+        if (s.note) { doc.setFont('helvetica', 'italic'); doc.setFontSize(8); doc.text(s.note, M, y); y += 5; }
+        y += 6;
+      });
+      var pages = doc.getNumberOfPages();
+      for (var p = 1; p <= pages; p++) { doc.setPage(p); doc.setFont('helvetica', 'normal'); doc.setFontSize(8); doc.text('Página ' + p + ' de ' + pages, 105, 290, { align: 'center' }); }
+      var r = await downloads.save({ filename: 'informe-hacienda-' + (infYear === 'all' ? 'todos' : infYear) + '-' + todayStr() + '.pdf', data: doc.output('arraybuffer') });
+      say(r && r.status === 'saved' ? 'Informe guardado.' : 'Informe enviado.');
+    } catch (e) {
+      say(e && e.code === 'declined' ? 'Descarga cancelada.' : 'No se pudo crear el PDF.');
+    }
+  };
+
+  /* ---------- arranque ---------- */
+  loadLocal();
+  rebuild();
+    (async function init() {
+    try { if (window.claude && window.claude.use) downloads = await window.claude.use('downloads'); } catch (e) {}
+    if (downloads) { $('btnExpA').hidden = false; $('btnExpL').hidden = false; }
+    try { if (window.claude && window.claude.use) mcp = await window.claude.use('mcp'); } catch (e) { mcp = null; }
+    if (!mcp) { updateSyncUi(); readyResolve(); return; }
+    try { await exclusive(loadAll); lastErr = null; setSync('ok'); } catch (e) { lastErr = e || { code: 'upstream_error' }; setSync('err'); }
+    readyResolve();
+  })();
+})();
+</script>
+
+</body></html>
